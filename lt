@@ -1,0 +1,8 @@
+LS_COLORS='di=01;34:ow=38;5;166:';
+
+if [[ $# -lt 1 ]] ;
+	then tree -L 2 --dirsfirst
+else
+	tree -L $1 $2 $3 --dirsfirst
+fi
+

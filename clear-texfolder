@@ -1,0 +1,10 @@
+# rm -rv *.aux *.fdb_latexmk *.fls *.gz *.log *.nav *.out *.snm *.toc 2> /dev/null
+
+# https://unix.stackexchange.com/questions/15308/how-to-use-find-command-to-search-for-multiple-extensions
+
+
+find . -type f \( -name \*.dvi -o -name \*.bak -o -name \*.aux -o -name \*.fdb_latexmk -o -name \*.fls -o -name \*.gz -o -name \*.log -o -name \*.nav -o -name \*.out -o -name \*.snm -o -name \*.toc \) -exec rm -v {} +
+# find . -type f \( -name \*.pdf \) -exec rm -v {} +
+
+
+

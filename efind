@@ -1,0 +1,60 @@
+#/bin/bash
+
+if [ "$#" -eq 3 ]
+then
+	startingPoint="$1"
+	fileName="$2"
+	maxdepth="$3"
+fi
+
+
+if [ "$#" -eq 2 ]
+then
+	startingPoint="$1"
+	fileName="$2"
+fi
+
+
+if [ "$#" -eq 1 ]
+then
+	startingPoint="."
+	fileName="$1"
+fi
+
+
+if [ "$#" -eq 0 ] 
+then
+	# echo "I miss params"
+	read -p "Starting Point: " startingPoint 
+	read -p "File name     : " fileName 
+	read -p "How deep      : " maxdepth
+fi
+
+fileName="*$fileName*"
+
+echo -ne "Starting Point: --> $startingPoint\n"
+echo -ne "File name:      --> $fileName\n"
+echo -ne "Max Depth:      --> $maxdepth\n"
+echo -ne "\n"
+echo -ne "Command --> "
+
+
+if [ -z "$maxdepth" ] 
+then
+	howdeep=""
+else
+	howdeep=" -maxdepth $maxdepth"
+fi
+
+
+# myfind="find $startingPoint -iname '$fileName'"
+myfind="find $startingPoint$howdeep -iname '$fileName'"
+
+tput bold && echo -e "$myfind\n" && tput sgr0 
+
+echo -ne "----------------------------------------------\n\n"
+
+# Go !
+eval $myfind
+
+

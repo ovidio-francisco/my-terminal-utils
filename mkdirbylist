@@ -1,0 +1,14 @@
+#/bin/bash
+
+sed -r 's/^[ \t0-9]*//g;s/[ \t]*$//g;s/\s+/-/g' $1 | xargs mkdir -v
+
+
+
+
+
+# sed -r 's/^[ \t0-9]*//g;s/[ \t]*$//g;s/\s+/_/g' $1 > out.txt
+# cat $1 | sed -r 's/^[ \t0-9]*//g;s/[ \t]*$//g;s/\s+/_/g' > out.txt
+# cat $1 | sed -r 's/^[ \t0-9]*//g;s/[ \t]*$//g;s/[\ \t]*/_/g' > out.txt
+# cat $1 | sed -e 's/^[ \t0-9]*//g;s/[ \t]*$//g' > out.txt
+# cat $1 | sed -e 's/^[0-1 \t]*//'
+# echo "  01          Rogerinho    do   Ingá da Silva    " | sed -e 's/^[0-1 \t]*//'

@@ -1,0 +1,5 @@
+#/bin/bash
+
+# cat $1 | nc termbin.com 9999 | cut -d/ -f3,4
+cat $1 | nc termbin.com 9999 | tr '\n' ' ' | cut -d/ -f3,4
+
