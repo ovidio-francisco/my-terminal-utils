@@ -1,3 +1,5 @@
+#!/usr/bin/bash
+
 LS_COLORS='di=01;34:ow=38;5;166:';
 
 if [[ $# -lt 1 ]] ;
