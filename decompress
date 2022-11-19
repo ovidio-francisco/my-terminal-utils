@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# shopt -s nullglob nocaseglob
+# for file in *.zip *.rar; do
+    # echo "Arquivo: $file"
+	# unar -d "$file"
+# done
+
+# find . \( -iname '*.zip' -or -iname '*.rar' \) -exec sh -c 'unar -q -o "${1%.*}" "$1" & echo "Extracted: $1"' _ {} \;
+
+find . -iname '*.rar' -exec sh -c 'unrar x "$1" "${1%.*}/" -idq & echo "Extracted: $1"' _ {} \;
+find . -iname '*.zip' -exec sh -c 'unar -q -o "${1%.*}" "$1" & echo "Extracted: $1"' _ {} \;
+
