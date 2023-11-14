@@ -1,13 +1,46 @@
 #!/bin/bash
 
-# shopt -s nullglob nocaseglob
-# for file in *.zip *.rar; do
-    # echo "Arquivo: $file"
-	# unar -d "$file"
-# done
+SAVEIFS=$IFS
+IFS=$(echo -en "\n\b")
 
-# find . \( -iname '*.zip' -or -iname '*.rar' \) -exec sh -c 'unar -q -o "${1%.*}" "$1" & echo "Extracted: $1"' _ {} \;
+countrar=0
+countzip=0
 
-find . -iname '*.rar' -exec sh -c 'unrar x "$1" "${1%.*}/" -idq & echo "Extracted: $1"' _ {} \;
-find . -iname '*.zip' -exec sh -c 'unar -q -o "${1%.*}" "$1" & echo "Extracted: $1"' _ {} \;
+for file in $(find . -name '*.rar' -print);
+do
+	unrar x "$file" "${file%.*}/" -idq     && 
+	echo "Extracted: $file"                && 
+	((countrar++))
+done;
+
+for file in $(find . -name '*.zip' -print);
+do
+	unar -q -o "${file%.*}" "$file"        && 
+	echo "Extracted: $file"                && 
+	((countzip++))
+done;
+
+
+total=$(($countrar+$countzip))
+
+echo ""
+echo "Arquivos .rar descompactados $countrar"
+echo "Arquivos .zip descompactados $countzip"
+echo ""
+echo "Total: $total"
+
+
+IFS=$SAVEIFS
+
+
+
+
+
+
+# find . -name '*.rar' -exec sh -c 'unrar x "$1" "${1%.*}/" -idq & echo "Extracted: $1"' _ {} \;
+# find . -name '*.zip' -exec sh -c 'unar -q -o "${1%.*}" "$1" & echo "Extracted: $1"' _ {} \;
+
+# find . -iname '*.rar' -exec sh -c 'unrar x "$1" "${1%.*}/" -idq & echo "Extracted: $1"' _ {} \;
+# find . -iname '*.zip' -exec sh -c 'unar -q -o "${1%.*}" "$1" & echo "Extracted: $1"' _ {} \;
+
 
