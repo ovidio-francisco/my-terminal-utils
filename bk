@@ -5,3 +5,5 @@ filename="bk-$1-$date"
 
 cp -iv $1 $filename
 
+
+# https://stackoverflow.com/questions/6121091/how-to-extract-directory-path-from-file-path

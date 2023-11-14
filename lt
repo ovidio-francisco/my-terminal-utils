@@ -1,10 +1,20 @@
 #!/usr/bin/bash
 
 LS_COLORS='di=01;34:ow=38;5;166:';
+LIGHTGRAY='\033[0;37m'
+RESET='\033[0m'
+
+
+if [ -f "./.gitignore" ]; then
+	gitignore='--gitignore'
+	echo -e "${LIGHTGRAY}gitignoring!${RESET}"
+else
+	gitignore=''
+fi
 
 if [[ $# -lt 1 ]] ;
-	then tree -L 2 --dirsfirst
+	then tree -L 2 --dirsfirst $gitignore
 else
-	tree -L $1 $2 $3 --dirsfirst
+	tree -L $1 $2 $3 --dirsfirst $gitignore
 fi
 
