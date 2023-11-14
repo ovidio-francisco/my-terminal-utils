@@ -1,9 +1,24 @@
 #!/bin/bash
 
-date=$(date +%Y-%m-%d_%H-%M)
-filename="bk-$1-$date"
+if ! [ -e $1 ]; then
+	echo -e "It seems like $1 doesn't exist\n"
+	exit
+fi
 
-cp -iv $1 $filename
+date=$(date +%Y-%m-%d_%H-%M)
+name="bk-$1-$date"
+
+if [ -f $1 ]; then
+	cp -iv $1 $name
+	echo -e "The file $1\nwas copied as $name\n"
+fi
+
+if [ -d $1 ]; then
+	cp -ivr $1 $name
+	echo -e "The directory $1\nwas copied as $name\n"
+fi
+
+
 
 
 # https://stackoverflow.com/questions/6121091/how-to-extract-directory-path-from-file-path
