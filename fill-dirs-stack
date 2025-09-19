@@ -1,0 +1,6 @@
+#!/usr/bin/bash
+
+pushd ~/Storage/Projetos/Desenvolvendo/blame/ > /dev/null
+pushd ~/.config/nvim > /dev/null
+pushd ~ > /dev/null
+
