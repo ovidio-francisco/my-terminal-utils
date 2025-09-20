@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 
-pushd ~/Storage/Projetos/Desenvolvendo/blame/ > /dev/null
-pushd ~/.config/nvim > /dev/null
-pushd ~ > /dev/null
+while read -r line; do
+	pushd $line > /dev/null
+done < ~/.dirs_stack
 
