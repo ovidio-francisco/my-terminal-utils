@@ -1,5 +1,13 @@
 #!/bin/zsh
 
+dirs_file="$HOME/.dirs_stack"
+
+if ! [[ -r $dirs_file ]]; then
+	printf "\nFile %s is missing :(\n" "$dirs_file"
+	return 1
+fi
+
+
 setopt pushd_silent   # suppress the numbering
 typeset -U arr        # prevents duplicates in arr
 
@@ -8,16 +16,24 @@ arr=("${(f)$(dirs -p | cut -f2)}")
 # remove the HOME
 arr=(${arr:#\~})
 
+# remove current dir
+arr=(${arr[@]:1})
+
 
 while IFS= read -r line; do
 	arr+=("$line")
-done < ~/.dirs_stack
+done < $dirs_file
+
+
+
 
 
 # MENU
 
-bold='\033[1m %d\033[0m → %s\n'
-bold_red='\033[1;31m %d\033[0m → %s\n'
+bold='\033[1m %s\033[0m → %s\n'
+bold_red='\033[1;31m %s\033[0m → %s\n'
+
+printf '\n'$bold_red 'q' 'nowhere'
 
 echo
 for i in {1..$#arr}; do
@@ -29,6 +45,10 @@ done
 
 echo
 read "?go to: " g
+
+if [[ $g == 'q' ]]; then
+	return 0
+fi
 
 if ! [[ $g == <-> ]]; then
   print -r -- "Invalid choice: $g (not a number)"
