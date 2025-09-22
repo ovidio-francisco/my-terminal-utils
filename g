@@ -16,15 +16,13 @@ arr=("${(f)$(dirs -p | cut -f2)}")
 # remove the HOME
 arr=(${arr:#\~})
 
-# remove current dir
+# remove current dir (the first one)
 arr=(${arr[@]:1})
 
 
 while IFS= read -r line; do
 	arr+=("$line")
 done < $dirs_file
-
-
 
 
 
@@ -70,10 +68,5 @@ else
   print -r -- "Path not found: $choice"
   return 1
 fi
-
-
-# go
-# cd "$target" || echo "Invalid choice: $((g-1))"
-
 
 
