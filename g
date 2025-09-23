@@ -13,17 +13,18 @@ typeset -U arr        # prevents duplicates in arr
 
 arr=("${(f)$(dirs -p | cut -f2)}")
 
-# remove the HOME
-arr=(${arr:#\~})
 
 # remove current dir (the first one)
 arr=(${arr[@]:1})
 
 
+# remove the HOME
+arr=(${arr:#\~})
+
+
 while IFS= read -r line; do
 	arr+=("$line")
 done < $dirs_file
-
 
 
 # MENU
@@ -45,6 +46,7 @@ echo
 read "?go to: " g
 
 if [[ $g == 'q' ]]; then
+	printf "\nBye :)\n"
 	return 0
 fi
 
@@ -58,7 +60,6 @@ g=$((g+1))       # zsh arrays are 1 indexed
 
 choice="${arr[g]}"
 target="${choice/#\~/$HOME}"     # expand ~ 
-
 
 
 # check it's a directory, then cd
