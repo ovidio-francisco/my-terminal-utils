@@ -32,7 +32,6 @@ done < $dirs_file
 bold='\033[1m %s\033[0m → %s\n'
 bold_red='\033[1;31m %s\033[0m → %s\n'
 
-printf '\n'$bold_red 'q' 'nowhere'
 
 echo
 for i in {1..$#arr}; do
@@ -41,18 +40,12 @@ for i in {1..$#arr}; do
 done
 
 
-
 echo
 read "?go to: " g
 
-if [[ $g == 'q' ]]; then
-	printf "\nBye :)\n"
-	return 0
-fi
-
 if ! [[ $g == <-> ]]; then
-  print -r -- "Invalid choice: $g (not a number)"
-  return 1
+  printf "\nBye :)\n"
+  return 0
 fi
 
 
