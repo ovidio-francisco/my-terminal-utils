@@ -9,22 +9,28 @@ fi
 
 
 setopt pushd_silent   # suppress the numbering
-typeset -U arr        # prevents duplicates in arr
+typeset -U opts       # prevents duplicates in opts
 
-arr=("${(f)$(dirs -p | cut -f2)}")
+
+opts=()
+
+while IFS= read -r line; do
+	opts+=("$line")
+done < $dirs_file
+
+
+direcs+=("${(f)$(dirs -p | cut -f2)}")
 
 
 # remove current dir (the first one)
-arr=(${arr[@]:1})
+direcs=(${direcs[@]:1})
 
 
 # remove the HOME
-arr=(${arr:#\~})
+direcs=(${direcs:#\~})
 
+opts+=( "${direcs[@]}" )
 
-while IFS= read -r line; do
-	arr+=("$line")
-done < $dirs_file
 
 
 # MENU
@@ -34,9 +40,9 @@ bold_red='\033[1;31m %s\033[0m → %s\n'
 
 
 echo
-for i in {1..$#arr}; do
+for i in {1..$#opts}; do
   idx=$((i-1))
-  printf $bold_red "$idx" "${arr[i]}"
+  printf $bold_red "$idx" "${opts[i]}"
 done
 
 
@@ -51,7 +57,7 @@ fi
 
 g=$((g+1))       # zsh arrays are 1 indexed
 
-choice="${arr[g]}"
+choice="${opts[g]}"
 target="${choice/#\~/$HOME}"     # expand ~ 
 
 
@@ -62,5 +68,14 @@ else
   print -r -- "Path not found: $choice"
   return 1
 fi
+
+
+
+
+
+
+# for dir in ${(f)"$(dirs -p)"}; do
+  # opts+=("$dir")
+# done
 
 
