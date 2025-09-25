@@ -30,19 +30,21 @@ opts=("${paths_f[@]}" "${paths_d[@]}")
 len=$#opts
 
 
+go() {
+
+	if [[ $1 == <-> && $1 -ge 0 && $1 -lt $len ]]; then
+		choice="${opts[$1]}"
+		target="${choice/#\~/$HOME}"      # expand ~ 
+		cd -- "${target}"
+		return 0
+	else
+		echo "Invalid index: $1"
+	fi
+}
 
 
-if [[ $1 == <-> && $1 -ge 0 && $1 -lt $len ]]; then
-  echo "$1 is a valid index"
-  idx=$(( $1 + 1 ))                 # convert 0-based 
-  choice="${opts[idx]}"
-  target="${choice/#\~/$HOME}"      # expand ~ 
-  cd -- "${target}"
-  return 0
-else
-  echo "Invalid index: $1"
-fi
 
+[[ -n $1 ]] && go "$1" && return 0
 
 
 
@@ -53,38 +55,29 @@ bold_blue='\033[1;34m%s\033[0m %s\n'
 
 echo
 for i in {1..$#paths_f}; do
-  idx=$((i-1))
-  printf $bold_red "$idx" "${paths_f[i]}"
+  printf $bold_red "$i" "${paths_f[i]}"
 done
 
-echo
-for j in {1..$#paths_d}; do
-  idx=$((j-1+i))
-  printf $bold_blue "$idx" "${paths_d[j]}"
+
+(( ${#paths_d} )) && print
+
+
+typeset -i base=$#paths_f
+for (( j=1; j<=${#paths_d}; j++ )); do
+  idx=$(( base + j ))
+  printf "$bold_blue" "$idx" "${paths_d[j]}"
 done
 
 
 echo
 read "?go to: " g
 
-if ! [[ $g == <-> ]]; then
-  printf "\nBye :)\n"
+if [[ -z $g ]]; then
+  printf "Bye :)\n"
   return 0
 fi
 
 
-g=$((g+1))       # zsh arrays are 1 indexed
-
-choice="${opts[g]}"
-target="${choice/#\~/$HOME}"     # expand ~ 
-
-
-# check it's a directory, then cd
-if [[ -d $target ]]; then
-  cd -- "$target"
-else
-  print -r -- "Path not found: $choice"
-  return 1
-fi
+go $g
 
 
