@@ -35,6 +35,7 @@ go() {
 	if [[ $1 == <-> && $1 -ge 0 && $1 -lt $len ]]; then
 		choice="${opts[$1]}"
 		target="${choice/#\~/$HOME}"      # expand ~ 
+		# echo $choice
 		cd -- "${target}"
 		return 0
 	else
@@ -72,12 +73,9 @@ done
 echo
 read "?go to: " g
 
-if [[ -z $g ]]; then
-  printf "Bye :)\n"
-  return 0
-fi
+[[ -n $g ]] && go $g 
 
+return 0
 
-go $g
 
 
