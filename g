@@ -7,11 +7,6 @@ if ! [[ -r $dirs_file ]]; then
 	return 1
 fi
 
-
-setopt pushd_silent   # suppress the numbering
-typeset -U paths_f       # prevents duplicates in paths_f
-
-
 paths_f=()
 
 while IFS= read -r line; do
@@ -25,8 +20,30 @@ paths_d=("${(f)$(dirs -p | cut -f2)}")
 paths_d=(${paths_d[@]:1})            # remove current dir (the first one)
 paths_d=(${paths_d:#\~})             # remove the HOME
 
-# paths_d=( "${paths_d[@]}" )        # Original order
-paths_d=( "${(O@a)paths_d[@]}" )     # Reverse order
+# paths_d=("${paths_d[@]}")          # Original order
+paths_d=("${(O@a)paths_d[@]}")       # Reverse order
+
+opts=("${paths_f[@]}" "${paths_d[@]}")
+
+
+
+len=$#opts
+
+
+
+
+if [[ $1 == <-> && $1 -ge 0 && $1 -lt $len ]]; then
+  echo "$1 is a valid index"
+  idx=$(( $1 + 1 ))                 # convert 0-based 
+  choice="${opts[idx]}"
+  target="${choice/#\~/$HOME}"      # expand ~ 
+  cd -- "${target}"
+  return 0
+else
+  echo "Invalid index: $1"
+fi
+
+
 
 
 # MENU
@@ -45,9 +62,6 @@ for j in {1..$#paths_d}; do
   idx=$((j-1+i))
   printf $bold_blue "$idx" "${paths_d[j]}"
 done
-
-
-opts=( "${paths_f[@]}" "${paths_d[@]}" )
 
 
 echo
