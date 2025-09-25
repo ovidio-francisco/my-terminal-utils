@@ -9,41 +9,45 @@ fi
 
 
 setopt pushd_silent   # suppress the numbering
-typeset -U opts       # prevents duplicates in opts
+typeset -U paths_f       # prevents duplicates in paths_f
 
 
-opts=()
+paths_f=()
 
 while IFS= read -r line; do
-	opts+=("$line")
+	paths_f+=("$line")
 done < $dirs_file
 
 
-direcs+=("${(f)$(dirs -p | cut -f2)}")
+paths_d=("${(f)$(dirs -p | cut -f2)}")
 
 
-# remove current dir (the first one)
-direcs=(${direcs[@]:1})
+paths_d=(${paths_d[@]:1})            # remove current dir (the first one)
+paths_d=(${paths_d:#\~})             # remove the HOME
 
-
-# remove the HOME
-direcs=(${direcs:#\~})
-
-opts+=( "${direcs[@]}" )
-
+# paths_d=( "${paths_d[@]}" )        # Original order
+paths_d=( "${(O@a)paths_d[@]}" )     # Reverse order
 
 
 # MENU
-
-bold='\033[1m %s\033[0m → %s\n'
-bold_red='\033[1;31m %s\033[0m → %s\n'
+bold_red='\033[1;31m%s\033[0m %s\n'
+bold_blue='\033[1;34m%s\033[0m %s\n'
 
 
 echo
-for i in {1..$#opts}; do
+for i in {1..$#paths_f}; do
   idx=$((i-1))
-  printf $bold_red "$idx" "${opts[i]}"
+  printf $bold_red "$idx" "${paths_f[i]}"
 done
+
+echo
+for j in {1..$#paths_d}; do
+  idx=$((j-1+i))
+  printf $bold_blue "$idx" "${paths_d[j]}"
+done
+
+
+opts=( "${paths_f[@]}" "${paths_d[@]}" )
 
 
 echo
@@ -68,14 +72,5 @@ else
   print -r -- "Path not found: $choice"
   return 1
 fi
-
-
-
-
-
-
-# for dir in ${(f)"$(dirs -p)"}; do
-  # opts+=("$dir")
-# done
 
 
