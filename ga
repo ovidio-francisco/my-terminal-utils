@@ -1,0 +1,12 @@
+#!/bin/zsh
+
+dirs_file="$HOME/.dirs_stack"
+
+[[ -n $1 ]] && path=$1 || read path
+
+
+path="${path/#$HOME/~}"      # tilde contraction 
+
+echo $path >> $dirs_file
+
+
