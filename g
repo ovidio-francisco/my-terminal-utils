@@ -32,7 +32,7 @@ len=$#opts
 
 go() {
 
-	if [[ $1 == <-> && $1 -ge 0 && $1 -lt $len ]]; then
+	if [[ $1 == <-> && $1 -ge 0 && $1 -le $len ]]; then
 		choice="${opts[$1]}"
 		target="${choice/#\~/$HOME}"      # expand ~ 
 		# echo $choice
