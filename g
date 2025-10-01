@@ -6,6 +6,7 @@ main() {
 	
 	[[ $1 = 'a' ]] && insert_path $2 && return 0
 	[[ $1 = 'r' ]] && delete_path    && return 0
+	[[ $1 = 'o' ]] && show_options   && return 0
 
 
 	read_sources
@@ -65,8 +66,9 @@ read_file() {
 	while IFS= read -r line; do
 		paths_f+=("$line")
 	done < $dirs_file
-
 }
+
+
 
 read_dirs() {
 	paths_d=("${(f)$(dirs -p | cut -f2)}")
@@ -105,6 +107,12 @@ menu() {
 			idx=$(( base + j ))
 			printf "$bold_blue" "$idx" "${paths_d[j]}"
 		done
+}
+
+show_options() {
+	read_sources
+	menu
+	echo
 }
 
 read_choice() {
@@ -149,6 +157,7 @@ unset_functions() {
 	unset -f menu
 	unset -f read_choice
 	unset -f go
+	unset -f show_options
 	unset -f unset_variables
 	unset -f unset_functions
 }
