@@ -92,10 +92,6 @@ read_sources() {
 }
 
 
-
-
-
-
 write() {
 	[[ $# -eq 0 ]] && print >&2 && return  
 
