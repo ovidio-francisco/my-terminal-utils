@@ -2,12 +2,14 @@
 
 dirs_file="$HOME/.dirs_stack"
 
-
 main() {
+	# pick editor once, near the top of the script
+	editor=${VISUAL:-${EDITOR:-vim}}
 	
 	[[ $1 = 'a' ]] && insert_path $2 && return 0
 	[[ $1 = 'r' ]] && delete_path    && return 0
 	[[ $1 = 'o' ]] && show_options   && return 0
+	[[ $1 = 'e' ]] && edit_dirs_file && return 0
 
 
 	read_sources
@@ -22,6 +24,10 @@ main() {
 
 }
 
+edit_dirs_file() {
+  editor=${VISUAL:-${EDITOR:-vim}}
+  ${=editor} "$dirs_file" </dev/tty >/dev/tty 2>&1
+}
 
 insert_path() {
 	the_file=$dirs_file
