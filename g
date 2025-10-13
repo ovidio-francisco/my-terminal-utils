@@ -49,7 +49,7 @@ delete_path() {
 	the_file=$dirs_file
 	read_file
 
-	write "Select the path to remove"
+	write "\nSelect a path to remove\n"
 	menu
 	read_choice "Index: "
 
