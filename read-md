@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+
+
+# ┌──────────────────────────────────────────────────────────────┐
+# │ Created by: ChatGPT                                          │
+# │ Conceived and guided by: Ovídio José Francisco               │
+# └──────────────────────────────────────────────────────────────┘
+
+
+set -euo pipefail
+
+[[ $# -lt 1 ]] && { echo "Usage: show-md FILE.md [--dark]"; exit 1; }
+
+in="$1"
+shift || true
+
+[[ -f "$in" ]] || { echo "File not found: $in" >&2; exit 1; }
+
+dark_mode=false
+for arg in "$@"; do
+  case "$arg" in
+    --dark) dark_mode=true ;;
+  esac
+done
+
+base="$(basename "${in%.*}")"
+out="/tmp/${base}.html"
+
+# Dark CSS embedded 
+dark_css='
+<style>
+html {
+  background-color: #1e1e1e;
+  color: #dddddd;
+  font-family: sans-serif;
+}
+a { color: #8ab4f8; }
+pre, code {
+  background-color: #252526;
+  color: #d4d4d4;
+  padding: 0.4em;
+  border-radius: 4px;
+}
+pre { overflow-x: auto; }
+h1, h2, h3, h4, h5, h6 { color: #ffffff; }
+</style>
+'
+
+# If dark mode, create a temporary stylesheet
+if $dark_mode; then
+  css_file="$(mktemp --suffix=.css)"
+  printf "%s" "$dark_css" > "$css_file"
+  css_flag=(-H "$css_file")
+else
+  css_flag=()
+fi
+
+# Pandoc conversion
+pandoc "$in" -f gfm -s -o "$out" \
+  --metadata title="$base" \
+  "${css_flag[@]}" \
+  --quiet
+
+# Remove temporary CSS (but only if dark mode)
+if $dark_mode; then
+  rm -f "$css_file"
+fi
+
+# Open result
+if command -v xdg-open >/dev/null; then
+  xdg-open "$out" >/dev/null 2>&1 &
+else
+  echo "HTML saved to: $out"
+fi
