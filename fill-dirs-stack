@@ -1,6 +1,0 @@
-#!/usr/bin/bash
-
-while read -r line; do
-	pushd $line > /dev/null
-done < ~/.dirs_stack
-
