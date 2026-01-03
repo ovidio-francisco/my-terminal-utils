@@ -57,7 +57,7 @@ fi
 
 # Pandoc conversion
 pandoc "$in" -f gfm -s -o "$out" \
-  --metadata title="$base" \
+  --metadata title="" \
   "${css_flag[@]}" \
   --quiet
 
