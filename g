@@ -132,8 +132,13 @@ show_options() {
 }
 
 read_choice() {
-	write
-	read "?$1" choice
+  write
+  local raw
+  read "?$1" raw
+
+  choice="${raw//[^0-9]/}"        # keep only digits
+
+  [[ -z $choice ]] && return 0    # if user typed no digits at all, treat as empty
 }
 
 go() {
