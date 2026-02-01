@@ -11,22 +11,24 @@ BOLD='\033[1m'
 RED='\033[31m'
 GREEN='\033[32m'
 YELLOW='\033[33m'
-BLUE='\033[34m'
 GRAY='\033[90m'
 
 ICON_ERROR='✗ '
-ICON_WARING='▲ '
+ICON_WARNING='▲ '
 ICON_REPO="📁"
 
-ICON_COL_WIDTH=1
+# -----------------------------
+# Column widths (configurable)
+# Override via env, e.g.:
+#   COL_NAME=28 COL_BRANCH=16 repos
+# -----------------------------
+COL_ICON="${COL_ICON:-2}"
+COL_NAME="${COL_NAME:-22}"
+COL_BRANCH="${COL_BRANCH:-12}"
+COL_CHANGES="${COL_CHANGES:-13}"
 
-
-# ICON_REPO="󰊢"
-
-# ICON_ERROR='e'
-# ICON_WARING='w'
-# ICON_REPO="p"
-
+# configurable scan depth
+SCAN_DEPTH="${SCAN_DEPTH:-4}"
 
 while getopts ":v" opt; do
   case "$opt" in
@@ -37,6 +39,20 @@ done
 
 [[ -f "$repos_file" ]] || { echo "Missing $repos_file" >&2; exit 1; }
 
+# -----------------------------
+# Dedup (O(1)) using bash map
+# -----------------------------
+declare -A SEEN
+seen_add_or_skip() {
+  local key="${1%/}"
+  [[ -n "${SEEN[$key]+x}" ]] && return 1
+  SEEN["$key"]=1
+  return 0
+}
+
+# -----------------------------
+# Git helpers
+# -----------------------------
 run_status_normal() {
   local repo="$1"
   git -C "$repo" status --porcelain=2 --branch
@@ -45,21 +61,94 @@ run_status_normal() {
 run_status_bare() {
   local gitdir="$1"
   local worktree="$2"
-  git --git-dir="$gitdir" --work-tree="$worktree" -c core.bare=false status --porcelain=2 --branch
+  git --git-dir="$gitdir" --work-tree="$worktree" status --porcelain=2 --branch
+}
+
+get_last_commit_normal() {
+  local repo="$1"
+  git -C "$repo" log -1 --pretty=format:'%h %s' 2>/dev/null || true
+}
+
+get_last_commit_bare() {
+  local gitdir="$1"
+  local worktree="$2"
+  git --git-dir="$gitdir" --work-tree="$worktree" log -1 --pretty=format:'%h %s' 2>/dev/null || true
+}
+
+# ---- bare upstream from config (reliable) ----
+get_branch_bare() {
+  local gitdir="$1" worktree="$2"
+  git --git-dir="$gitdir" --work-tree="$worktree" symbolic-ref -q --short HEAD 2>/dev/null || true
+}
+
+get_upstream_bare_from_config() {
+  local gitdir="$1" worktree="$2" branch="$3"
+
+  [[ -z "$branch" ]] && return 0
+
+  local remote merge short merge_short upstream
+  remote="$(git --git-dir="$gitdir" --work-tree="$worktree" config --get "branch.${branch}.remote" 2>/dev/null || true)"
+  merge="$(git --git-dir="$gitdir" --work-tree="$worktree" config --get "branch.${branch}.merge"  2>/dev/null || true)"
+
+  [[ -z "$remote" || -z "$merge" ]] && return 0
+
+  merge_short="${merge#refs/heads/}"
+  upstream="${remote}/${merge_short}"
+  printf '%s' "$upstream"
+}
+
+get_ab_bare_from_upstream_ref() {
+  local gitdir="$1" worktree="$2" upstream_ref="$3"
+  # output: "<behind> <ahead>"
+  git --git-dir="$gitdir" --work-tree="$worktree" \
+    rev-list --left-right --count "${upstream_ref}...HEAD" 2>/dev/null || true
+}
+
+# Inject missing upstream/ab lines into porcelain status for bare repos
+augment_bare_status() {
+  local gitdir="$1" worktree="$2" status="$3"
+
+  # if status already has branch.upstream, leave it
+  if awk '$2=="branch.upstream"{found=1} END{exit !found}' <<<"$status"; then
+    printf '%s' "$status"
+    return
+  fi
+
+  local branch upstream remote merge merge_short upstream_ref behind ahead counts
+  branch="$(get_branch_bare "$gitdir" "$worktree")"
+  upstream="$(get_upstream_bare_from_config "$gitdir" "$worktree" "$branch")"
+
+  [[ -z "$upstream" ]] && { printf '%s' "$status"; return; }
+
+  # Build upstream ref: refs/remotes/<remote>/<branch>
+  remote="${upstream%%/*}"          # origin
+  merge_short="${upstream#*/}"      # master
+  upstream_ref="refs/remotes/${remote}/${merge_short}"
+
+  counts="$(get_ab_bare_from_upstream_ref "$gitdir" "$worktree" "$upstream_ref")"
+  if [[ -n "$counts" ]]; then
+    read -r behind ahead <<<"$counts"
+  else
+    behind=0
+    ahead=0
+  fi
+
+  status+=$'\n'"# branch.upstream $upstream"
+  status+=$'\n'"# branch.ab +${ahead:-0} -${behind:-0}"
+
+  printf '%s' "$status"
 }
 
 extract_summary() {
   local status="$1"
-  local branch ab changes_count behind ahead
+  local branch changes_count ahead behind
+
   branch="$(awk '$2=="branch.head"{print $3}' <<<"$status")"
-  ab="$(awk '$2=="branch.ab"{print substr($3,2), substr($4,2)}' <<<"$status")"
   changes_count="$(grep -cE '^[12?]' <<<"$status" || true)"
 
-  behind=""
-  ahead=""
-  if [[ -n "$ab" ]]; then
-    read -r behind ahead <<<"$ab"
-  fi
+  # porcelain v2 uses: "# branch.ab +<ahead> -<behind>"
+  ahead="$(awk '$2=="branch.ab"{gsub(/^\+/,"",$3); print $3}' <<<"$status")"
+  behind="$(awk '$2=="branch.ab"{gsub(/^-/, "",$4); print $4}' <<<"$status")"
 
   printf '%s|%s|%s|%s\n' \
     "${branch:-"(detached)"}" \
@@ -68,24 +157,64 @@ extract_summary() {
     "${ahead:-}"
 }
 
+# -----------------------------
+# Printing
+# -----------------------------
 print_verbose() {
   local name="$1"
   local where="$2"
   local status="$3"
+  local last_commit="${4:-N/A}"
 
-  local branch changes_count behind ahead
+  local branch changes_count behind ahead upstream
   IFS='|' read -r branch changes_count behind ahead < <(extract_summary "$status")
+  upstream="$(awk '$2=="branch.upstream"{print $3}' <<<"$status")"
 
-  printf "%b\n" "${BOLD}$ICON_REPO$name${RESET}"
-  printf "  %s\n" "$where"
-  printf "  branch: ${BOLD}${GRAY}%s${RESET}\n" "$branch"
-
-  if [[ "$changes_count" != "0" ]]; then
-    printf "  ${YELLOW}changes: %s${RESET}\n" "$changes_count"
+  local sync_colored
+  if [[ -n "$behind" || -n "$ahead" ]]; then
+    ahead="${ahead:-0}"
+    behind="${behind:-0}"
+    if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
+      sync_colored="UP-TO-DATE"
+    else
+      local ahead_txt="AHEAD:$ahead"
+      local behind_txt="BEHIND:$behind"
+      [[ "$ahead"  != "0" ]] && ahead_txt="${YELLOW}${ahead_txt}${RESET}"
+      [[ "$behind" != "0" ]] && behind_txt="${RED}${behind_txt}${RESET}"
+      sync_colored="$ahead_txt $behind_txt"
+    fi
   else
-    printf "  working tree clean\n"
+    sync_colored="NO-UPSTREAM"
   fi
 
+  local changes_label
+  if [[ "$changes_count" == "0" ]]; then
+    changes_label="${GREEN}CLEAN${RESET}"
+  else
+    changes_label="${YELLOW}CHANGES:${changes_count}${RESET}"
+  fi
+
+  printf "%b\n" "${BOLD}${ICON_REPO}${name}${RESET}"
+  printf "  %s\n" "$where"
+  printf "  branch:    ${BOLD}${GRAY}%s${RESET}\n" "$branch"
+  if [[ -n "$upstream" ]]; then
+    printf "  upstream:  ${GRAY}%s${RESET}\n" "$upstream"
+  else
+    printf "  upstream:  ${GRAY}%s${RESET}\n" "NO-UPSTREAM"
+  fi
+  printf "  status:    %b\n" "$changes_label"
+  printf "  sync:      %b\n" "$sync_colored"
+  printf "  last:      ${GRAY}%s${RESET}\n" "${last_commit:-N/A}"
+
+  if [[ "$changes_count" != "0" ]]; then
+    printf "  files:\n"
+    grep -E '^[12?] ' <<<"$status" | head -n 12 | sed 's/^/    /'
+    local total_lines
+    total_lines="$(grep -cE '^[12?] ' <<<"$status" || true)"
+    if [[ "${total_lines:-0}" -gt 12 ]]; then
+      printf "    ${GRAY}... (%s more)${RESET}\n" "$(( total_lines - 12 ))"
+    fi
+  fi
   printf "\n"
 }
 
@@ -96,31 +225,35 @@ print_short() {
   local branch changes_count behind ahead
   IFS='|' read -r branch changes_count behind ahead < <(extract_summary "$status")
 
-  # plain text (NO colors here)
-  local changes_plain sync_plain
+  local changes_plain
   if [[ "$changes_count" == "0" ]]; then
     changes_plain="CLEAN"
   else
     changes_plain="CHANGES:$changes_count"
   fi
 
+  local sync_colored
   if [[ -n "$behind" || -n "$ahead" ]]; then
+    ahead="${ahead:-0}"
+    behind="${behind:-0}"
     if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
-      sync_plain="UP-TO-DATE"
+      sync_colored="UP-TO-DATE"
     else
-      sync_plain="AHEAD:$ahead BEHIND:$behind"
+      local ahead_txt="AHEAD:$ahead"
+      local behind_txt="BEHIND:$behind"
+      [[ "$ahead"  != "0" ]] && ahead_txt="${YELLOW}${ahead_txt}${RESET}"
+      [[ "$behind" != "0" ]] && behind_txt="${RED}${behind_txt}${RESET}"
+      sync_colored="$ahead_txt $behind_txt"
     fi
   else
-    sync_plain="NO-UPSTREAM"
+    sync_colored="NO-UPSTREAM"
   fi
 
-  # pad plain text ONLY (fixed widths)
   local name_p branch_p changes_p
-  name_p=$(printf "%-20s" "$name")
-  branch_p=$(printf "%-8s"  "$branch")
-  changes_p=$(printf "%-11s" "$changes_plain")
+  name_p=$(printf "%-${COL_NAME}s" "$name")
+  branch_p=$(printf "%-${COL_BRANCH}s" "$branch")
+  changes_p=$(printf "%-${COL_CHANGES}s" "$changes_plain")
 
-  # color AFTER padding
   local changes_colored
   if [[ "$changes_count" == "0" ]]; then
     changes_colored="${GREEN}${changes_p}${RESET}"
@@ -129,13 +262,13 @@ print_short() {
   fi
 
   printf "%b\n" "$(
-	  printf "%-${ICON_COL_WIDTH}s${BOLD}%s${RESET} ${BOLD}${GRAY}%s${RESET} %b %s" \
-		  "$ICON_REPO" \
-		  "$name_p" \
-		  "$branch_p" \
-		  "$changes_colored" \
-		  "$sync_plain"
-	  )"
+    printf "%-${COL_ICON}s${BOLD}%s${RESET} ${BOLD}${GRAY}%s${RESET} %b %b" \
+      "$ICON_REPO" \
+      "$name_p" \
+      "$branch_p" \
+      "$changes_colored" \
+      "$sync_colored"
+  )"
 }
 
 print_problem() {
@@ -148,10 +281,9 @@ print_problem() {
     printf "  %b\n\n" "${RED}${msg}${RESET}"
   else
     local name_p
-    name_p=$(printf "%-20s" "$name")
-
+    name_p=$(printf "%-${COL_NAME}s" "$name")
     printf "%b\n" "$(
-      printf "%-${ICON_COL_WIDTH}s${BOLD}%s${RESET} %-8s %-11s ${RED}%s${RESET}" \
+      printf "%-${COL_ICON}s${BOLD}%s${RESET} %-${COL_BRANCH}s %-${COL_CHANGES}s ${RED}%s${RESET}" \
         "$icon" \
         "$name_p" \
         "" \
@@ -161,54 +293,98 @@ print_problem() {
   fi
 }
 
+# -----------------------------
+# Repo discovery
+# -----------------------------
+is_repo() { [[ -d "$1/.git" ]]; }
 
+discover_repos_under() {
+  local base="$1"
+  [[ -d "$base" ]] || return 0
+  find "$base" \
+    -mindepth 2 -maxdepth "$SCAN_DEPTH" \
+    -type d -name .git -prune \
+    -print 2>/dev/null \
+  | sed 's|/\.git$||' \
+  | sort -u
+}
+
+# -----------------------------
+# Main loop
+# -----------------------------
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
   line="${line/#\~/$HOME}"
 
+  # -------- BARE entry --------
   if [[ "$line" == BARE\|* ]]; then
-	IFS='|' read -r _ gitdir worktree name <<<"$line"
-	name="${name:-BARE}"
+    IFS='|' read -r _ gitdir worktree name <<<"$line"
+    name="${name:-BARE}"
     gitdir="${gitdir/#\~/$HOME}"
     worktree="${worktree/#\~/$HOME}"
 
     if [[ ! -d "$gitdir" ]]; then
-		print_problem "$ICON_ERROR" "$(basename "$repo")" "NOT-FOUND"
+      print_problem "$ICON_ERROR" "$name" "GITDIR-NOT-FOUND"
       continue
     fi
 
-	# worktree existence is enough for bare repos; no git checks here
-	[[ -d "$worktree" ]] || true
+    seen_add_or_skip "BARE:$gitdir" || continue
 
     status="$(run_status_bare "$gitdir" "$worktree")"
+    status="$(augment_bare_status "$gitdir" "$worktree" "$status")"
+
     if [[ "$verbose" == 1 ]]; then
-	  print_verbose "$name" "gitdir=$gitdir worktree=$worktree" "$status"
+      last="$(get_last_commit_bare "$gitdir" "$worktree")"
+      [[ -n "$last" ]] || last="N/A"
+      print_verbose "$name" "$worktree" "$status" "$last"
     else
-	  print_short "$name" "$status"
+      print_short "$name" "$status"
     fi
     continue
   fi
 
+  # -------- normal path entry --------
   repo="$line"
 
   if [[ ! -d "$repo" ]]; then
-	  print_problem "$ICON_ERROR" "$(basename "$repo")" "NOT-FOUND"
+    print_problem "$ICON_ERROR" "$(basename "$repo")" "NOT-FOUND"
     continue
   fi
 
-  if [[ ! -d "$repo/.git" ]]; then
-	  print_problem "$ICON_WARING" "$(basename "$repo")" "NOT-A-REPO"
+  # If it's not a repo, scan inside it for repos
+  if ! is_repo "$repo"; then
+    found_any=0
+    while IFS= read -r subrepo; do
+      [[ -n "$subrepo" ]] || continue
+      seen_add_or_skip "$subrepo" || continue
+      found_any=1
+
+      status="$(run_status_normal "$subrepo")"
+      if [[ "$verbose" == 1 ]]; then
+        last="$(get_last_commit_normal "$subrepo")"
+        [[ -n "$last" ]] || last="N/A"
+        print_verbose "$(basename "$subrepo")" "$subrepo" "$status" "$last"
+      else
+        print_short "$(basename "$subrepo")" "$status"
+      fi
+    done < <(discover_repos_under "$repo")
+
+    if [[ "$found_any" == 0 ]]; then
+      print_problem "$ICON_WARNING" "$(basename "$repo")" "NOT-A-REPO"
+    fi
     continue
   fi
+
+  # It's a repo itself
+  seen_add_or_skip "$repo" || continue
 
   status="$(run_status_normal "$repo")"
   if [[ "$verbose" == 1 ]]; then
-    print_verbose "$(basename "$repo")" "$repo" "$status"
+    last="$(get_last_commit_normal "$repo")"
+    [[ -n "$last" ]] || last="N/A"
+    print_verbose "$(basename "$repo")" "$repo" "$status" "$last"
   else
     print_short "$(basename "$repo")" "$status"
   fi
 
 done < "$repos_file"
-
-
-
