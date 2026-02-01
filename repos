@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repos_file="$HOME/.repos"
+verbose=0
+
+# colors
+RESET='\033[0m'
+BOLD='\033[1m'
+
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+BLUE='\033[34m'
+GRAY='\033[90m'
+
+ICON_ERROR='✗ '
+ICON_WARING='▲ '
+ICON_REPO="📁"
+
+ICON_COL_WIDTH=1
+
+
+# ICON_REPO="󰊢"
+
+# ICON_ERROR='e'
+# ICON_WARING='w'
+# ICON_REPO="p"
+
+
+while getopts ":v" opt; do
+  case "$opt" in
+    v) verbose=1 ;;
+    *) echo "usage: $(basename "$0") [-v]" >&2; exit 2 ;;
+  esac
+done
+
+[[ -f "$repos_file" ]] || { echo "Missing $repos_file" >&2; exit 1; }
+
+run_status_normal() {
+  local repo="$1"
+  git -C "$repo" status --porcelain=2 --branch
+}
+
+run_status_bare() {
+  local gitdir="$1"
+  local worktree="$2"
+  git --git-dir="$gitdir" --work-tree="$worktree" -c core.bare=false status --porcelain=2 --branch
+}
+
+extract_summary() {
+  local status="$1"
+  local branch ab changes_count behind ahead
+  branch="$(awk '$2=="branch.head"{print $3}' <<<"$status")"
+  ab="$(awk '$2=="branch.ab"{print substr($3,2), substr($4,2)}' <<<"$status")"
+  changes_count="$(grep -cE '^[12?]' <<<"$status" || true)"
+
+  behind=""
+  ahead=""
+  if [[ -n "$ab" ]]; then
+    read -r behind ahead <<<"$ab"
+  fi
+
+  printf '%s|%s|%s|%s\n' \
+    "${branch:-"(detached)"}" \
+    "${changes_count:-0}" \
+    "${behind:-}" \
+    "${ahead:-}"
+}
+
+print_verbose() {
+  local name="$1"
+  local where="$2"
+  local status="$3"
+
+  local branch changes_count behind ahead
+  IFS='|' read -r branch changes_count behind ahead < <(extract_summary "$status")
+
+  printf "%b\n" "${BOLD}$ICON_REPO$name${RESET}"
+  printf "  %s\n" "$where"
+  printf "  branch: ${BOLD}${GRAY}%s${RESET}\n" "$branch"
+
+  if [[ "$changes_count" != "0" ]]; then
+    printf "  ${YELLOW}changes: %s${RESET}\n" "$changes_count"
+  else
+    printf "  working tree clean\n"
+  fi
+
+  printf "\n"
+}
+
+print_short() {
+  local name="$1"
+  local status="$2"
+
+  local branch changes_count behind ahead
+  IFS='|' read -r branch changes_count behind ahead < <(extract_summary "$status")
+
+  # plain text (NO colors here)
+  local changes_plain sync_plain
+  if [[ "$changes_count" == "0" ]]; then
+    changes_plain="CLEAN"
+  else
+    changes_plain="CHANGES:$changes_count"
+  fi
+
+  if [[ -n "$behind" || -n "$ahead" ]]; then
+    if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
+      sync_plain="UP-TO-DATE"
+    else
+      sync_plain="AHEAD:$ahead BEHIND:$behind"
+    fi
+  else
+    sync_plain="NO-UPSTREAM"
+  fi
+
+  # pad plain text ONLY (fixed widths)
+  local name_p branch_p changes_p
+  name_p=$(printf "%-20s" "$name")
+  branch_p=$(printf "%-8s"  "$branch")
+  changes_p=$(printf "%-11s" "$changes_plain")
+
+  # color AFTER padding
+  local changes_colored
+  if [[ "$changes_count" == "0" ]]; then
+    changes_colored="${GREEN}${changes_p}${RESET}"
+  else
+    changes_colored="${YELLOW}${changes_p}${RESET}"
+  fi
+
+  printf "%b\n" "$(
+	  printf "%-${ICON_COL_WIDTH}s${BOLD}%s${RESET} ${BOLD}${GRAY}%s${RESET} %b %s" \
+		  "$ICON_REPO" \
+		  "$name_p" \
+		  "$branch_p" \
+		  "$changes_colored" \
+		  "$sync_plain"
+	  )"
+}
+
+print_problem() {
+  local icon="$1"
+  local name="$2"
+  local msg="$3"
+
+  if [[ "$verbose" == 1 ]]; then
+    printf "%b\n" "${BOLD}${icon} $name${RESET}"
+    printf "  %b\n\n" "${RED}${msg}${RESET}"
+  else
+    local name_p
+    name_p=$(printf "%-20s" "$name")
+
+    printf "%b\n" "$(
+      printf "%-${ICON_COL_WIDTH}s${BOLD}%s${RESET} %-8s %-11s ${RED}%s${RESET}" \
+        "$icon" \
+        "$name_p" \
+        "" \
+        "" \
+        "$msg"
+    )"
+  fi
+}
+
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+  line="${line/#\~/$HOME}"
+
+  if [[ "$line" == BARE\|* ]]; then
+	IFS='|' read -r _ gitdir worktree name <<<"$line"
+	name="${name:-BARE}"
+    gitdir="${gitdir/#\~/$HOME}"
+    worktree="${worktree/#\~/$HOME}"
+
+    if [[ ! -d "$gitdir" ]]; then
+		print_problem "$ICON_ERROR" "$(basename "$repo")" "NOT-FOUND"
+      continue
+    fi
+
+	# worktree existence is enough for bare repos; no git checks here
+	[[ -d "$worktree" ]] || true
+
+    status="$(run_status_bare "$gitdir" "$worktree")"
+    if [[ "$verbose" == 1 ]]; then
+	  print_verbose "$name" "gitdir=$gitdir worktree=$worktree" "$status"
+    else
+	  print_short "$name" "$status"
+    fi
+    continue
+  fi
+
+  repo="$line"
+
+  if [[ ! -d "$repo" ]]; then
+	  print_problem "$ICON_ERROR" "$(basename "$repo")" "NOT-FOUND"
+    continue
+  fi
+
+  if [[ ! -d "$repo/.git" ]]; then
+	  print_problem "$ICON_WARING" "$(basename "$repo")" "NOT-A-REPO"
+    continue
+  fi
+
+  status="$(run_status_normal "$repo")"
+  if [[ "$verbose" == 1 ]]; then
+    print_verbose "$(basename "$repo")" "$repo" "$status"
+  else
+    print_short "$(basename "$repo")" "$status"
+  fi
+
+done < "$repos_file"
+
+
+
