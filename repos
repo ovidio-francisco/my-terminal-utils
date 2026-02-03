@@ -1,38 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repos_file="$HOME/.repos"
+# ============================================================
+# Config
+# ============================================================
+repos_file="${REPOS_FILE:-$HOME/.repos}"
 
-verbose=0
-list_files=0         # -l : show "files" section even when clean (verbose output)
-files_dirty_only=0   # -f : show "files" section only when dirty (verbose output) [overrides -l]
-dirty_only=0         # -d : list only dirty repos (works in short + verbose)
-
-# colors
-RESET='\033[0m'
-BOLD='\033[1m'
-
-RED='\033[31m'
-GREEN='\033[32m'
-YELLOW='\033[33m'
-GRAY='\033[90m'
-
-ICON_ERROR='✗ '
-ICON_WARNING='▲ '
-ICON_REPO="📁"
-
-# -----------------------------
-# Column widths (configurable)
-# Override via env, e.g.:
-#   COL_NAME=28 COL_BRANCH=16 repos
-# -----------------------------
+# Column widths (override via env)
+# e.g.: COL_NAME=28 COL_BRANCH=16 repos
 COL_ICON="${COL_ICON:-2}"
 COL_NAME="${COL_NAME:-22}"
 COL_BRANCH="${COL_BRANCH:-12}"
 COL_CHANGES="${COL_CHANGES:-13}"
 
-# configurable scan depth
 SCAN_DEPTH="${SCAN_DEPTH:-4}"
+
+# Colors/icons
+RESET=$'\033[0m'
+BOLD=$'\033[1m'
+RED=$'\033[31m'
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+GRAY=$'\033[90m'
+
+ICON_ERROR='✗'
+ICON_WARNING='▲'
+ICON_REPO='📁'
+
+# ============================================================
+# Flags (runtime)
+# ============================================================
+verbose=0
+list_files=0        # -l : show "files" section even when clean (verbose output)
+files_dirty_only=0  # -f : show "files" section only when dirty (verbose output) overrides -l
+dirty_only=0        # -d : list only dirty repos (short + verbose)
+selector=""
 
 usage() {
   cat <<'EOF'
@@ -54,7 +56,7 @@ Examples:
   repos
   repos -d
   repos -v
-  repos -v -d
+  repos -vd
   repos 8
   repos bin
   repos -l 8
@@ -62,52 +64,49 @@ Examples:
 EOF
 }
 
-# parse options (support --help)
-while [[ "${1:-}" == -* ]]; do
-  case "$1" in
-    --) shift; break ;;
-    -h|--help) usage; exit 0 ;;
-    -*)
-      # expand bundled flags: -vd -> -v -d
-      flags="${1#-}"
-      shift
-      for ((i=0; i<${#flags}; i++)); do
-        case "${flags:i:1}" in
-          v) verbose=1 ;;
-          l) list_files=1 ;;
-          f) files_dirty_only=1 ;;
-          d) dirty_only=1 ;;
-          h) usage; exit 0 ;;
-          *)
-            echo "Unknown option: -${flags:i:1}" >&2
-            usage >&2
-            exit 2
-            ;;
-        esac
-      done
-      continue
-      ;;
-    *) break ;;
-  esac
-done
+die() { echo "$*" >&2; exit 1; }
 
-selector="${1:-}"   # optional: number or name
+# ============================================================
+# Option parsing (supports bundled flags: -vd)
+# ============================================================
+parse_args() {
+  while [[ "${1:-}" == -* ]]; do
+    case "$1" in
+      --) shift; break ;;
+      -h|--help) usage; exit 0 ;;
+      -*)
+        local flags="${1#-}"
+        shift
+        local i c
+        for ((i=0; i<${#flags}; i++)); do
+          c="${flags:i:1}"
+          case "$c" in
+            v) verbose=1 ;;
+            l) list_files=1 ;;
+            f) files_dirty_only=1 ;;
+            d) dirty_only=1 ;;
+            h) usage; exit 0 ;;
+            *) die "Unknown option: -$c" ;;
+          esac
+        done
+        ;;
+    esac
+  done
 
-[[ -f "$repos_file" ]] || { echo "Missing $repos_file" >&2; exit 1; }
+  selector="${1:-}"
 
-# -f overrides -l
-if [[ "$files_dirty_only" == 1 ]]; then
-  list_files=0
-fi
+  # -f overrides -l
+  [[ "$files_dirty_only" == 1 ]] && list_files=0
 
-# if user requests files behavior without selector, show verbose so it becomes visible
-if [[ -z "${selector:-}" && ( "$list_files" == 1 || "$files_dirty_only" == 1 ) ]]; then
-  verbose=1
-fi
+  # if user requests files behavior without selector, show verbose so it becomes visible
+  if [[ -z "$selector" && ( "$list_files" == 1 || "$files_dirty_only" == 1 ) ]]; then
+    verbose=1
+  fi
+}
 
-# -----------------------------
-# Dedup (O(1)) using bash map
-# -----------------------------
+# ============================================================
+# Dedup
+# ============================================================
 declare -A SEEN
 seen_add_or_skip() {
   local key="${1%/}"
@@ -116,82 +115,55 @@ seen_add_or_skip() {
   return 0
 }
 
-# -----------------------------
+# ============================================================
 # Git helpers
-# -----------------------------
-run_status_normal() {
-  local repo="$1"
-  git -C "$repo" status --porcelain=2 --branch
-}
+# ============================================================
+git_status_normal() { git -C "$1" status --porcelain=2 --branch; }
+git_status_bare()   { git --git-dir="$1" --work-tree="$2" status --porcelain=2 --branch; }
 
-run_status_bare() {
-  local gitdir="$1"
-  local worktree="$2"
-  git --git-dir="$gitdir" --work-tree="$worktree" status --porcelain=2 --branch
-}
+git_last_normal() { git -C "$1" log -1 --pretty=format:'%h %s' 2>/dev/null || true; }
+git_last_bare()   { git --git-dir="$1" --work-tree="$2" log -1 --pretty=format:'%h %s' 2>/dev/null || true; }
 
-get_last_commit_normal() {
-  local repo="$1"
-  git -C "$repo" log -1 --pretty=format:'%h %s' 2>/dev/null || true
-}
+bare_branch() { git --git-dir="$1" --work-tree="$2" symbolic-ref -q --short HEAD 2>/dev/null || true; }
 
-get_last_commit_bare() {
-  local gitdir="$1"
-  local worktree="$2"
-  git --git-dir="$gitdir" --work-tree="$worktree" log -1 --pretty=format:'%h %s' 2>/dev/null || true
-}
-
-# ---- bare upstream from config (reliable) ----
-get_branch_bare() {
-  local gitdir="$1" worktree="$2"
-  git --git-dir="$gitdir" --work-tree="$worktree" symbolic-ref -q --short HEAD 2>/dev/null || true
-}
-
-get_upstream_bare_from_config() {
+bare_upstream_from_config() {
   local gitdir="$1" worktree="$2" branch="$3"
-
   [[ -z "$branch" ]] && return 0
 
-  local remote merge merge_short upstream
+  local remote merge
   remote="$(git --git-dir="$gitdir" --work-tree="$worktree" config --get "branch.${branch}.remote" 2>/dev/null || true)"
   merge="$(git --git-dir="$gitdir" --work-tree="$worktree" config --get "branch.${branch}.merge"  2>/dev/null || true)"
 
   [[ -z "$remote" || -z "$merge" ]] && return 0
-
-  merge_short="${merge#refs/heads/}"
-  upstream="${remote}/${merge_short}"
-  printf '%s' "$upstream"
+  printf '%s/%s' "$remote" "${merge#refs/heads/}"
 }
 
-get_ab_bare_from_upstream_ref() {
+bare_ab_counts_from_upstream_ref() {
   local gitdir="$1" worktree="$2" upstream_ref="$3"
-  # output: "<behind> <ahead>"
   git --git-dir="$gitdir" --work-tree="$worktree" \
     rev-list --left-right --count "${upstream_ref}...HEAD" 2>/dev/null || true
 }
 
-# Inject missing upstream/ab lines into porcelain status for bare repos
-augment_bare_status() {
+# If porcelain doesn't include upstream/ab for bare repos, inject them.
+augment_bare_status_if_needed() {
   local gitdir="$1" worktree="$2" status="$3"
 
-  # if status already has branch.upstream, leave it
+  # If already has branch.upstream, do nothing
   if awk '$2=="branch.upstream"{found=1} END{exit !found}' <<<"$status"; then
     printf '%s' "$status"
     return
   fi
 
-  local branch upstream remote merge_short upstream_ref behind ahead counts
-  branch="$(get_branch_bare "$gitdir" "$worktree")"
-  upstream="$(get_upstream_bare_from_config "$gitdir" "$worktree" "$branch")"
-
+  local branch upstream remote merge_short upstream_ref counts behind ahead
+  branch="$(bare_branch "$gitdir" "$worktree")"
+  upstream="$(bare_upstream_from_config "$gitdir" "$worktree" "$branch")"
   [[ -z "$upstream" ]] && { printf '%s' "$status"; return; }
 
-  # Build upstream ref: refs/remotes/<remote>/<branch>
-  remote="${upstream%%/*}"          # origin
-  merge_short="${upstream#*/}"      # master
+  remote="${upstream%%/*}"
+  merge_short="${upstream#*/}"
   upstream_ref="refs/remotes/${remote}/${merge_short}"
 
-  counts="$(get_ab_bare_from_upstream_ref "$gitdir" "$worktree" "$upstream_ref")"
+  counts="$(bare_ab_counts_from_upstream_ref "$gitdir" "$worktree" "$upstream_ref")"
   if [[ -n "$counts" ]]; then
     read -r behind ahead <<<"$counts"
   else
@@ -201,18 +173,19 @@ augment_bare_status() {
 
   status+=$'\n'"# branch.upstream $upstream"
   status+=$'\n'"# branch.ab +${ahead:-0} -${behind:-0}"
-
   printf '%s' "$status"
 }
 
+# ============================================================
+# Status parsing + predicates
+# ============================================================
 extract_summary() {
   local status="$1"
   local branch changes_count ahead behind
 
   branch="$(awk '$2=="branch.head"{print $3}' <<<"$status")"
-  changes_count="$(grep -cE '^[12?]' <<<"$status" || true)"
+  changes_count="$(grep -cE '^[12?] ' <<<"$status" || true)"
 
-  # porcelain v2 uses: "# branch.ab +<ahead> -<behind>"
   ahead="$(awk '$2=="branch.ab"{gsub(/^\+/,"",$3); print $3}' <<<"$status")"
   behind="$(awk '$2=="branch.ab"{gsub(/^-/, "",$4); print $4}' <<<"$status")"
 
@@ -223,42 +196,105 @@ extract_summary() {
     "${ahead:-}"
 }
 
-is_dirty_status() {
-  local status="$1"
-  grep -qE '^[12?] ' <<<"$status"
+is_dirty_status() { grep -qE '^[12?] ' <<<"$1"; }
+
+status_upstream() {
+  awk '$2=="branch.upstream"{print $3}' <<<"$1"
 }
 
-# -----------------------------
-# Printing
-# -----------------------------
-print_verbose() {
-  local name="$1"
-  local where="$2"
-  local status="$3"
-  local last_commit="${4:-N/A}"
+files_lines() {
+  # porcelain v2 changed files lines start with: 1, 2, or ?
+  grep -E '^[12?] ' <<<"$1" || true
+}
 
-  local branch changes_count behind ahead upstream
-  IFS='|' read -r branch changes_count behind ahead < <(extract_summary "$status")
-  upstream="$(awk '$2=="branch.upstream"{print $3}' <<<"$status")"
+# ============================================================
+# Presentation helpers (shared between short + verbose)
+# ============================================================
+format_changes_plain() {
+  local changes_count="$1"
+  [[ "$changes_count" == "0" ]] && printf 'CLEAN' || printf 'CHANGES:%s' "$changes_count"
+}
 
-  local sync_colored
-  if [[ -n "$behind" || -n "$ahead" ]]; then
+format_changes_colored_padded() {
+  local changes_count="$1" changes_padded="$2"
+  if [[ "$changes_count" == "0" ]]; then
+    printf '%b' "${GREEN}${changes_padded}${RESET}"
+  else
+    printf '%b' "${YELLOW}${changes_padded}${RESET}"
+  fi
+}
+
+format_sync_colored() {
+  local ahead="${1:-}" behind="${2:-}"
+
+  if [[ -n "$ahead" || -n "$behind" ]]; then
     ahead="${ahead:-0}"
     behind="${behind:-0}"
     if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
-      sync_colored="UP-TO-DATE"
-    else
-      local ahead_txt="AHEAD:$ahead"
-      local behind_txt="BEHIND:$behind"
-      [[ "$ahead"  != "0" ]] && ahead_txt="${YELLOW}${ahead_txt}${RESET}"
-      [[ "$behind" != "0" ]] && behind_txt="${RED}${behind_txt}${RESET}"
-      sync_colored="$ahead_txt $behind_txt"
+      printf 'UP-TO-DATE'
+      return
     fi
-  else
-    sync_colored="NO-UPSTREAM"
+
+    local ahead_txt="AHEAD:$ahead"
+    local behind_txt="BEHIND:$behind"
+    [[ "$ahead"  != "0" ]] && ahead_txt="${YELLOW}${ahead_txt}${RESET}"
+    [[ "$behind" != "0" ]] && behind_txt="${RED}${behind_txt}${RESET}"
+    printf '%b %b' "$ahead_txt" "$behind_txt"
+    return
   fi
 
-  local changes_label
+  printf 'NO-UPSTREAM'
+}
+
+should_show_files_section() {
+  local changes_count="$1"
+
+  # -f : only when dirty
+  if [[ "$files_dirty_only" == 1 ]]; then
+    [[ "$changes_count" != "0" ]] && return 0 || return 1
+  fi
+
+  # -l : always
+  if [[ "$list_files" == 1 ]]; then
+    return 0
+  fi
+
+  # default: only when dirty
+  [[ "$changes_count" != "0" ]] && return 0 || return 1
+}
+
+# ============================================================
+# Printing
+# ============================================================
+print_problem() {
+  local icon="$1" name="$2" msg="$3"
+
+  if [[ "$verbose" == 1 ]]; then
+    printf "%b\n" "${BOLD}${icon} ${name}${RESET}"
+    printf "  %b\n\n" "${RED}${msg}${RESET}"
+    return
+  fi
+
+  local name_p
+  name_p=$(printf "%-${COL_NAME}s" "$name")
+  printf "%b\n" "$(
+    printf "%-${COL_ICON}s${BOLD}%s${RESET} %-${COL_BRANCH}s %-${COL_CHANGES}s ${RED}%s${RESET}" \
+      "$icon" "$name_p" "" "" "$msg"
+  )"
+}
+
+print_verbose() {
+  local name="$1" where="$2" status="$3" last="${4:-N/A}"
+
+  local branch changes_count behind ahead
+  IFS='|' read -r branch changes_count behind ahead < <(extract_summary "$status")
+
+  local upstream
+  upstream="$(status_upstream "$status")"
+
+  local sync_colored changes_label
+  sync_colored="$(format_sync_colored "$ahead" "$behind")"
+
   if [[ "$changes_count" == "0" ]]; then
     changes_label="${GREEN}CLEAN${RESET}"
   else
@@ -268,35 +304,15 @@ print_verbose() {
   printf "%b\n" "${BOLD}${ICON_REPO}${name}${RESET}"
   printf "  %s\n" "$where"
   printf "  branch:    ${BOLD}${GRAY}%s${RESET}\n" "$branch"
-  if [[ -n "$upstream" ]]; then
-    printf "  upstream:  ${GRAY}%s${RESET}\n" "$upstream"
-  else
-    printf "  upstream:  ${GRAY}%s${RESET}\n" "NO-UPSTREAM"
-  fi
+  printf "  upstream:  ${GRAY}%s${RESET}\n" "${upstream:-NO-UPSTREAM}"
   printf "  status:    %b\n" "$changes_label"
   printf "  sync:      %b\n" "$sync_colored"
-  printf "  last:      ${GRAY}%s${RESET}\n" "${last_commit:-N/A}"
+  printf "  last:      ${GRAY}%s${RESET}\n" "${last:-N/A}"
 
-  # Files section rules:
-  # - if -f: show only when dirty
-  # - else if -l: show even when clean
-  # - else: show only when dirty (default behavior)
-  local show_files=0
-  if [[ "$files_dirty_only" == 1 ]]; then
-    [[ "$changes_count" != "0" ]] && show_files=1
-  else
-    if [[ "$list_files" == 1 ]]; then
-      show_files=1
-    else
-      [[ "$changes_count" != "0" ]] && show_files=1
-    fi
-  fi
-
-  if [[ "$show_files" == 1 ]]; then
+  if should_show_files_section "$changes_count"; then
     printf "  files:\n"
-
     local files total_lines
-    files="$(grep -E '^[12?] ' <<<"$status" || true)"
+    files="$(files_lines "$status")"
     if [[ -n "$files" ]]; then
       printf "%s\n" "$files" | head -n 12 | sed 's/^/    /'
       total_lines="$(printf "%s\n" "$files" | wc -l | tr -d ' ')"
@@ -312,36 +328,14 @@ print_verbose() {
 }
 
 print_short() {
-  local idx="$1"
-  local name="$2"
-  local status="$3"
+  local idx="$1" name="$2" status="$3"
 
   local branch changes_count behind ahead
   IFS='|' read -r branch changes_count behind ahead < <(extract_summary "$status")
 
-  local changes_plain
-  if [[ "$changes_count" == "0" ]]; then
-    changes_plain="CLEAN"
-  else
-    changes_plain="CHANGES:$changes_count"
-  fi
-
-  local sync_colored
-  if [[ -n "$behind" || -n "$ahead" ]]; then
-    ahead="${ahead:-0}"
-    behind="${behind:-0}"
-    if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
-      sync_colored="UP-TO-DATE"
-    else
-      local ahead_txt="AHEAD:$ahead"
-      local behind_txt="BEHIND:$behind"
-      [[ "$ahead"  != "0" ]] && ahead_txt="${YELLOW}${ahead_txt}${RESET}"
-      [[ "$behind" != "0" ]] && behind_txt="${RED}${behind_txt}${RESET}"
-      sync_colored="$ahead_txt $behind_txt"
-    fi
-  else
-    sync_colored="NO-UPSTREAM"
-  fi
+  local changes_plain sync_colored
+  changes_plain="$(format_changes_plain "$changes_count")"
+  sync_colored="$(format_sync_colored "$ahead" "$behind")"
 
   local idx_p name_p branch_p changes_p
   idx_p=$(printf "%2s" "$idx")
@@ -350,13 +344,8 @@ print_short() {
   changes_p=$(printf "%-${COL_CHANGES}s" "$changes_plain")
 
   local changes_colored
-  if [[ "$changes_count" == "0" ]]; then
-    changes_colored="${GREEN}${changes_p}${RESET}"
-  else
-    changes_colored="${YELLOW}${changes_p}${RESET}"
-  fi
+  changes_colored="$(format_changes_colored_padded "$changes_count" "$changes_p")"
 
-  # index and dash are dim (GRAY)
   printf "%b\n" "$(
     printf "${GRAY}%s${RESET} ${GRAY}-${RESET} %-${COL_ICON}s${BOLD}%s${RESET} ${BOLD}${GRAY}%s${RESET} %b %b" \
       "$idx_p" \
@@ -368,31 +357,9 @@ print_short() {
   )"
 }
 
-print_problem() {
-  local icon="$1"
-  local name="$2"
-  local msg="$3"
-
-  if [[ "$verbose" == 1 ]]; then
-    printf "%b\n" "${BOLD}${icon} $name${RESET}"
-    printf "  %b\n\n" "${RED}${msg}${RESET}"
-  else
-    local name_p
-    name_p=$(printf "%-${COL_NAME}s" "$name")
-    printf "%b\n" "$(
-      printf "%-${COL_ICON}s${BOLD}%s${RESET} %-${COL_BRANCH}s %-${COL_CHANGES}s ${RED}%s${RESET}" \
-        "$icon" \
-        "$name_p" \
-        "" \
-        "" \
-        "$msg"
-    )"
-  fi
-}
-
-# -----------------------------
+# ============================================================
 # Repo discovery
-# -----------------------------
+# ============================================================
 is_repo() { [[ -d "$1/.git" ]]; }
 
 discover_repos_under() {
@@ -400,34 +367,28 @@ discover_repos_under() {
   [[ -d "$base" ]] || return 0
   find "$base" \
     -mindepth 2 -maxdepth "$SCAN_DEPTH" \
-    -type d -name .git -prune \
-    -print 2>/dev/null \
+    -type d -name .git -prune -print 2>/dev/null \
   | sed 's|/\.git$||' \
   | sort -u
 }
 
-# -----------------------------
-# Collected results (for numbering + selection)
-# -----------------------------
+# ============================================================
+# Storage
+# ============================================================
 declare -a R_NAME R_WHERE R_STATUS R_LAST
 
 add_entry() {
-  local name="$1" where="$2" status="$3" last="$4"
-  [[ -n "$last" ]] || last="N/A"
-  R_NAME+=("$name")
-  R_WHERE+=("$where")
-  R_STATUS+=("$status")
-  R_LAST+=("$last")
+  R_NAME+=("$1")
+  R_WHERE+=("$2")
+  R_STATUS+=("$3")
+  R_LAST+=("${4:-N/A}")
 }
 
 is_number() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 
 match_indices_by_name() {
-  local q="$1"
-  local i
-  local out=""
+  local q="$1" i out=""
 
-  # 1) exact matches
   for i in "${!R_NAME[@]}"; do
     [[ "${R_NAME[$i]}" == "$q" ]] && out+="$((i+1))"$'\n'
   done
@@ -436,18 +397,90 @@ match_indices_by_name() {
     return 0
   fi
 
-  # 2) substring matches
   for i in "${!R_NAME[@]}"; do
     [[ "${R_NAME[$i]}" == *"$q"* ]] && printf '%s\n' "$((i+1))"
   done
 }
 
+# ============================================================
+# Collect stage
+# ============================================================
+collect_from_normal_repo() {
+  local path="$1"
+  local status last
+  status="$(git_status_normal "$path")"
+  last="$(git_last_normal "$path")"
+  add_entry "$(basename "$path")" "$path" "$status" "$last"
+}
+
+collect_from_bare_entry() {
+  local gitdir="$1" worktree="$2" name="$3"
+
+  [[ -d "$gitdir" ]] || { print_problem "$ICON_ERROR" "$name" "GITDIR-NOT-FOUND"; return 0; }
+
+  seen_add_or_skip "BARE:$gitdir" || return 0
+
+  local status last
+  status="$(git_status_bare "$gitdir" "$worktree")"
+  status="$(augment_bare_status_if_needed "$gitdir" "$worktree" "$status")"
+  last="$(git_last_bare "$gitdir" "$worktree")"
+
+  add_entry "$name" "$worktree" "$status" "$last"
+}
+
+collect_from_line() {
+  local line="$1"
+  [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && return 0
+
+  line="${line/#\~/$HOME}"
+
+  if [[ "$line" == BARE\|* ]]; then
+    local _ gitdir worktree name
+    IFS='|' read -r _ gitdir worktree name <<<"$line"
+    name="${name:-BARE}"
+    gitdir="${gitdir/#\~/$HOME}"
+    worktree="${worktree/#\~/$HOME}"
+    collect_from_bare_entry "$gitdir" "$worktree" "$name"
+    return 0
+  fi
+
+  local repo="$line"
+  if [[ ! -d "$repo" ]]; then
+    print_problem "$ICON_ERROR" "$(basename "$repo")" "NOT-FOUND"
+    return 0
+  fi
+
+  if ! is_repo "$repo"; then
+    local found_any=0 subrepo
+    while IFS= read -r subrepo; do
+      [[ -n "$subrepo" ]] || continue
+      seen_add_or_skip "$subrepo" || continue
+      found_any=1
+      collect_from_normal_repo "$subrepo"
+    done < <(discover_repos_under "$repo")
+
+    [[ "$found_any" == 0 ]] && print_problem "$ICON_WARNING" "$(basename "$repo")" "NOT-A-REPO"
+    return 0
+  fi
+
+  seen_add_or_skip "$repo" || return 0
+  collect_from_normal_repo "$repo"
+}
+
+# ============================================================
+# Render stage
+# ============================================================
+passes_dirty_filter() {
+  local status="$1"
+  [[ "$dirty_only" == 1 ]] && is_dirty_status "$status" && return 0
+  [[ "$dirty_only" == 1 ]] && return 1
+  return 0
+}
+
 render_short_list() {
   local i idx
   for i in "${!R_NAME[@]}"; do
-    if [[ "$dirty_only" == 1 ]]; then
-      is_dirty_status "${R_STATUS[$i]}" || continue
-    fi
+    passes_dirty_filter "${R_STATUS[$i]}" || continue
     idx="$((i+1))"
     print_short "$idx" "${R_NAME[$i]}" "${R_STATUS[$i]}"
   done
@@ -462,118 +495,55 @@ render_verbose_for_index() {
     return 1
   }
 
-  if [[ "$dirty_only" == 1 ]]; then
-    is_dirty_status "${R_STATUS[$i]}" || {
-      print_problem "$ICON_WARNING" "${R_NAME[$i]}" "CLEAN (filtered by -d)"
-      return 0
-    }
+  if [[ "$dirty_only" == 1 ]] && ! is_dirty_status "${R_STATUS[$i]}"; then
+    print_problem "$ICON_WARNING" "${R_NAME[$i]}" "CLEAN (filtered by -d)"
+    return 0
   fi
 
   print_verbose "${R_NAME[$i]}" "${R_WHERE[$i]}" "${R_STATUS[$i]}" "${R_LAST[$i]}"
 }
 
-# -----------------------------
-# Main loop (collect)
-# -----------------------------
+render_verbose_all() {
+  local i
+  for i in "${!R_NAME[@]}"; do
+    passes_dirty_filter "${R_STATUS[$i]}" || continue
+    print_verbose "${R_NAME[$i]}" "${R_WHERE[$i]}" "${R_STATUS[$i]}" "${R_LAST[$i]}"
+  done
+}
+
+# ============================================================
+# Main
+# ============================================================
+parse_args "$@"
+[[ -f "$repos_file" ]] || die "Missing $repos_file"
+
 while IFS= read -r line || [[ -n "$line" ]]; do
-  [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-  line="${line/#\~/$HOME}"
-
-  # -------- BARE entry --------
-  if [[ "$line" == BARE\|* ]]; then
-    IFS='|' read -r _ gitdir worktree name <<<"$line"
-    name="${name:-BARE}"
-    gitdir="${gitdir/#\~/$HOME}"
-    worktree="${worktree/#\~/$HOME}"
-
-    if [[ ! -d "$gitdir" ]]; then
-      print_problem "$ICON_ERROR" "$name" "GITDIR-NOT-FOUND"
-      continue
-    fi
-
-    seen_add_or_skip "BARE:$gitdir" || continue
-
-    status="$(run_status_bare "$gitdir" "$worktree")"
-    status="$(augment_bare_status "$gitdir" "$worktree" "$status")"
-    last="$(get_last_commit_bare "$gitdir" "$worktree")"
-
-    add_entry "$name" "$worktree" "$status" "$last"
-    continue
-  fi
-
-  # -------- normal path entry --------
-  repo="$line"
-
-  if [[ ! -d "$repo" ]]; then
-    print_problem "$ICON_ERROR" "$(basename "$repo")" "NOT-FOUND"
-    continue
-  fi
-
-  # If it's not a repo, scan inside it for repos
-  if ! is_repo "$repo"; then
-    found_any=0
-    while IFS= read -r subrepo; do
-      [[ -n "$subrepo" ]] || continue
-      seen_add_or_skip "$subrepo" || continue
-      found_any=1
-
-      status="$(run_status_normal "$subrepo")"
-      last="$(get_last_commit_normal "$subrepo")"
-
-      add_entry "$(basename "$subrepo")" "$subrepo" "$status" "$last"
-    done < <(discover_repos_under "$repo")
-
-    if [[ "$found_any" == 0 ]]; then
-      print_problem "$ICON_WARNING" "$(basename "$repo")" "NOT-A-REPO"
-    fi
-    continue
-  fi
-
-  # It's a repo itself
-  seen_add_or_skip "$repo" || continue
-
-  status="$(run_status_normal "$repo")"
-  last="$(get_last_commit_normal "$repo")"
-
-  add_entry "$(basename "$repo")" "$repo" "$status" "$last"
-
+  collect_from_line "$line"
 done < "$repos_file"
 
-# -----------------------------
-# Output stage (after collecting)
-# -----------------------------
 if [[ -n "$selector" ]]; then
-  # selection implies verbose output
   verbose=1
-
   if is_number "$selector"; then
     render_verbose_for_index "$selector"
     exit 0
   fi
 
   matches="$(match_indices_by_name "$selector" || true)"
-  if [[ -z "${matches:-}" ]]; then
-    print_problem "$ICON_ERROR" "$selector" "NO-MATCH"
-    exit 1
-  fi
+  [[ -n "$matches" ]] || { print_problem "$ICON_ERROR" "$selector" "NO-MATCH"; exit 1; }
 
   while IFS= read -r idx; do
     [[ -n "$idx" ]] || continue
     render_verbose_for_index "$idx"
-  done <<< "$matches"
+  done <<<"$matches"
   exit 0
 fi
 
-# No selector: list mode
 if [[ "$verbose" == 1 ]]; then
-  # verbose all (with optional dirty-only filter)
-  for i in "${!R_NAME[@]}"; do
-    if [[ "$dirty_only" == 1 ]]; then
-      is_dirty_status "${R_STATUS[$i]}" || continue
-    fi
-    print_verbose "${R_NAME[$i]}" "${R_WHERE[$i]}" "${R_STATUS[$i]}" "${R_LAST[$i]}"
-  done
+  render_verbose_all
 else
-  # short list with numbering (with optional dirty-only filter)
   render_short_list
 fi
+
+
+
+
