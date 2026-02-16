@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+
+import sys
+import calendar
+from datetime import date
+
+WEEKDAYS = {
+    "mo": 0,
+    "tu": 1,
+    "we": 2,
+    "th": 3,
+    "fr": 4,
+    "sa": 5,
+    "su": 6,
+}
+
+def parse_weekday(value):
+    if value.isdigit():
+        n = int(value)
+        if 0 <= n <= 6:
+            return n
+        raise ValueError("Weekday number must be between 0 (Monday) and 6 (Sunday)")
+    key = value.lower()
+    if key in WEEKDAYS:
+        return WEEKDAYS[key]
+    raise ValueError(f"Invalid weekday: {value}")
+
+def usage():
+    print("Usage: pday <weekday> [-l|--line]")
+    print("Example: pday we")
+    print("         pday fr --line")
+
+def main():
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        usage()
+        sys.exit(1)
+
+    weekday = parse_weekday(sys.argv[1])
+    single_line = False
+
+    if len(sys.argv) == 3:
+        if sys.argv[2] in ("-l", "--line"):
+            single_line = True
+        else:
+            usage()
+            sys.exit(1)
+
+    year = date.today().year
+
+    print(f"Year: {year}")
+    print(f"Weekday: {calendar.day_name[weekday]}")
+
+    for month in range(1, 13):
+        month_name = calendar.month_name[month]
+        days_in_month = calendar.monthrange(year, month)[1]
+
+        matching_days = [
+            day
+            for day in range(1, days_in_month + 1)
+            if date(year, month, day).weekday() == weekday
+        ]
+
+        if single_line:
+            days_str = " ".join(f"{day:2d}" for day in matching_days) if matching_days else "-"
+            print(f"{month_name:<10}: {days_str}")
+        else:
+            print(f"\n{month_name}")
+            if not matching_days:
+                print("  -")
+            else:
+                for day in matching_days:
+                    print(f"{day:2d} - ")
+
+if __name__ == "__main__":
+    main()
