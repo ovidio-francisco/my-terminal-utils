@@ -2,74 +2,235 @@
 
 import sys
 import calendar
-from datetime import date
+from datetime import date, timedelta
+
+
+# ============================================================
+# ANSI styling (optional)
+# ============================================================
+
+RED = "\033[31m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+def style(text: str, *, color: bool) -> str:
+    """Bold+red when color=True; otherwise unchanged."""
+    return f"{BOLD}{RED}{text}{RESET}" if color else text
+
+
+# ============================================================
+# Holidays (Brazil) — fixed + Easter-based
+# ============================================================
+
+def easter_sunday(year: int) -> date:
+    """Return Easter Sunday as a date object (Gregorian calendar)."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def holidays_for_year(year: int) -> dict[date, str]:
+    h: dict[date, str] = {}
+
+    fixed = {
+        (1, 1):   "Ano Novo",
+        (4, 21):  "Tiradentes",
+        (5, 1):   "Dia do Trabalho",
+        (9, 7):   "Independência do Brasil",
+        (10, 12): "Nossa Senhora Aparecida",
+        (11, 2):  "Finados",
+        (11, 15): "Proclamação da República",
+        (11, 20): "Dia da Consciência Negra",
+        (12, 25): "Natal",
+    }
+    for (m, d), name in fixed.items():
+        h[date(year, m, d)] = name
+
+    easter = easter_sunday(year)
+    movable = {
+        easter - timedelta(days=48): "Carnaval (segunda-feira)",
+        easter - timedelta(days=47): "Carnaval (terça-feira)",
+        easter - timedelta(days=46): "Quarta-feira de Cinzas",
+        easter - timedelta(days=2):  "Sexta-feira Santa",
+        easter:                      "Páscoa",
+        easter + timedelta(days=60): "Corpus Christi",
+    }
+    h.update(movable)
+
+    return h
+
+
+# ============================================================
+# Weekdays
+# ============================================================
 
 WEEKDAYS = {
-    "mo": 0,
-    "tu": 1,
-    "we": 2,
-    "th": 3,
-    "fr": 4,
-    "sa": 5,
-    "su": 6,
+    "mo": 0, "tu": 1, "we": 2, "th": 3,
+    "fr": 4, "sa": 5, "su": 6,
 }
 
-def parse_weekday(value):
+
+def parse_weekday(value: str) -> int:
     if value.isdigit():
         n = int(value)
         if 0 <= n <= 6:
             return n
-        raise ValueError("Weekday number must be between 0 (Monday) and 6 (Sunday)")
+        raise ValueError("Weekday number must be between 0 and 6")
     key = value.lower()
     if key in WEEKDAYS:
         return WEEKDAYS[key]
     raise ValueError(f"Invalid weekday: {value}")
 
-def usage():
-    print("Usage: pday <weekday> [-l|--line]")
-    print("Example: pday we")
-    print("         pday fr --line")
 
-def main():
-    if len(sys.argv) < 2 or len(sys.argv) > 3:
+# ============================================================
+# CLI helpers
+# ============================================================
+
+def usage() -> None:
+    print("Usage:")
+    print("  days <weekday> [-l|--line] [--color|--no-color]")
+    print("  days --holidays [--color|--no-color]")
+    print("")
+    print("Examples:")
+    print("  days we")
+    print("  days fr --line")
+    print("  days fr --line --color")
+    print("  days --holidays")
+
+
+def parse_args(argv: list[str]) -> dict:
+    if not argv:
         usage()
         sys.exit(1)
 
-    weekday = parse_weekday(sys.argv[1])
-    single_line = False
+    opts = {
+        "single_line": False,
+        "list_holidays": False,
+        "color": False,      # default: --no-color
+        "weekday_arg": None,
+    }
 
-    if len(sys.argv) == 3:
-        if sys.argv[2] in ("-l", "--line"):
-            single_line = True
+    for a in argv:
+        if a in ("-l", "--line"):
+            opts["single_line"] = True
+        elif a in ("-H", "--holidays"):
+            opts["list_holidays"] = True
+        elif a == "--color":
+            opts["color"] = True
+        elif a == "--no-color":
+            opts["color"] = False
+        elif opts["weekday_arg"] is None:
+            opts["weekday_arg"] = a
         else:
             usage()
             sys.exit(1)
 
-    year = date.today().year
+    # If --holidays is present, weekday is optional; otherwise required
+    if not opts["list_holidays"] and opts["weekday_arg"] is None:
+        usage()
+        sys.exit(1)
 
+    return opts
+
+
+# ============================================================
+# Output
+# ============================================================
+
+def print_all_holidays(year: int, hmap: dict[date, str], *, color: bool) -> None:
+    print(f"Holidays in {year}:\n")
+    for dt in sorted(hmap):
+        dt_str = style(str(dt), color=color)
+        print(f"{dt_str}: {hmap[dt]}")
+
+
+def month_days_for_weekday(year: int, month: int, weekday: int) -> list[int]:
+    days_in_month = calendar.monthrange(year, month)[1]
+    return [
+        d for d in range(1, days_in_month + 1)
+        if date(year, month, d).weekday() == weekday
+    ]
+
+
+def print_calendar_by_weekday(year: int, weekday: int, hmap: dict[date, str], *, single_line: bool, color: bool) -> None:
     print(f"Year: {year}")
-    print(f"Weekday: {calendar.day_name[weekday]}")
+    print(f"Weekday: {calendar.day_name[weekday]}\n")
 
     for month in range(1, 13):
         month_name = calendar.month_name[month]
-        days_in_month = calendar.monthrange(year, month)[1]
-
-        matching_days = [
-            day
-            for day in range(1, days_in_month + 1)
-            if date(year, month, day).weekday() == weekday
-        ]
+        matching_days = month_days_for_weekday(year, month, weekday)
 
         if single_line:
-            days_str = " ".join(f"{day:2d}" for day in matching_days) if matching_days else "-"
+            # If --color: holidays are bold+red (no extra char).
+            # If --no-color (default): holidays get a trailing '*' to keep them visible.
+            tokens: list[str] = []
+            for d in matching_days:
+                dt = date(year, month, d)
+                is_holiday = dt in hmap
+
+                if color:
+                    token = style(f"{d:2d}", color=is_holiday) if is_holiday else f"{d:2d}"
+                else:
+                    token = f"{d:2d}{'*' if is_holiday else ' '}"  # fixed width 3
+
+                tokens.append(token)
+
+            days_str = " ".join(tokens) if tokens else "-"
             print(f"{month_name:<10}: {days_str}")
+
         else:
             print(f"\n{month_name}")
             if not matching_days:
                 print("  -")
-            else:
-                for day in matching_days:
-                    print(f"{day:2d} - ")
+                continue
+
+            for d in matching_days:
+                dt = date(year, month, d)
+                is_holiday = dt in hmap
+
+                dstr = style(f"{d:2d}", color=color and is_holiday) if is_holiday else f"{d:2d}"
+                if is_holiday:
+                    print(f"{dstr} - {hmap[dt]}")
+                else:
+                    print(f"{dstr} -")
+
+
+# ============================================================
+# Main
+# ============================================================
+
+def main() -> None:
+    opts = parse_args(sys.argv[1:])
+
+    year = date.today().year
+    hmap = holidays_for_year(year)
+
+    if opts["list_holidays"]:
+        print_all_holidays(year, hmap, color=opts["color"])
+        return
+
+    weekday = parse_weekday(opts["weekday_arg"])
+    print_calendar_by_weekday(
+        year,
+        weekday,
+        hmap,
+        single_line=opts["single_line"],
+        color=opts["color"],
+    )
+
 
 if __name__ == "__main__":
     main()
