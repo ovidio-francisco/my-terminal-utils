@@ -1,72 +1,134 @@
 #!/usr/bin/env bash
 
-
 # ┌──────────────────────────────────────────────────────────────┐
 # │ Created by: ChatGPT                                          │
 # │ Conceived and guided by: Ovídio José Francisco               │
 # └──────────────────────────────────────────────────────────────┘
 
-
 set -euo pipefail
 
-[[ $# -lt 1 ]] && { echo "Usage: show-md FILE.md [--dark]"; exit 1; }
+usage() {
+  cat <<'EOF'
+Usage:
+  show-md FILE [--dark] [--width <value>]
 
-in="$1"
-shift || true
+Examples:
+  show-md README.md
+  show-md README.md --dark
+  show-md --dark --width 90em README.md
+  show-md README.md --width 1100px
 
-[[ -f "$in" ]] || { echo "File not found: $in" >&2; exit 1; }
+Notes:
+  --width accepts any valid CSS length (e.g., 72em, 900px, 80ch, 100%).
+EOF
+  exit 1
+}
 
 dark_mode=false
-for arg in "$@"; do
-  case "$arg" in
-    --dark) dark_mode=true ;;
+width="40em"
+in=""
+
+# Parse args (order-independent)
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dark)
+      dark_mode=true
+      shift
+      ;;
+    --width)
+      shift
+      [[ $# -gt 0 ]] || { echo "Missing value for --width" >&2; usage; }
+      width="$1"
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      [[ -z "$in" ]] && in="$1" || { echo "Too many positional args" >&2; usage; }
+      shift
+      ;;
   esac
 done
+
+[[ -n "$in" ]] || usage
+[[ -f "$in" ]] || { echo "File not found: $in" >&2; exit 1; }
 
 base="$(basename "${in%.*}")"
 out="/tmp/${base}.html"
 
-# Dark CSS embedded 
-dark_css='
+# ---------------------------------------------------------------
+# Build header snippet with embedded CSS (so it won't disappear)
+# ---------------------------------------------------------------
+header_file="$(mktemp --suffix=.html)"
+
+# Base layout CSS (always applied): override Pandoc template width,
+# but set it to user-specified value.
+cat > "$header_file" <<EOF
 <style>
-html {
+:root {
+  --content-width: ${width};
+}
+
+/* Set your preferred reading width */
+body {
+  max-width: var(--content-width);
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+/* Nice defaults */
+pre { overflow-x: auto; }
+</style>
+EOF
+
+# Dark theme CSS (optional)
+if $dark_mode; then
+  cat >> "$header_file" <<'EOF'
+<style>
+html, body {
   background-color: #1e1e1e;
   color: #dddddd;
   font-family: sans-serif;
 }
+
 a { color: #8ab4f8; }
+
 pre, code {
   background-color: #252526;
   color: #d4d4d4;
   padding: 0.4em;
   border-radius: 4px;
 }
-pre { overflow-x: auto; }
+
 h1, h2, h3, h4, h5, h6 { color: #ffffff; }
 </style>
-'
-
-# If dark mode, create a temporary stylesheet
-if $dark_mode; then
-  css_file="$(mktemp --suffix=.css)"
-  printf "%s" "$dark_css" > "$css_file"
-  css_flag=(-H "$css_file")
-else
-  css_flag=()
+EOF
 fi
 
+cleanup() {
+  rm -f "$header_file"
+}
+trap cleanup EXIT
+
+# ---------------------------------------------------------------
 # Pandoc conversion
-pandoc "$in" -f gfm -s -o "$out" \
+# ---------------------------------------------------------------
+pandoc "$in" \
+  -f gfm \
+  -s \
+  -o "$out" \
   --metadata title="" \
-  "${css_flag[@]}" \
+  --include-in-header="$header_file" \
   --quiet
 
-# Remove temporary CSS (but only if dark mode)
-if $dark_mode; then
-  rm -f "$css_file"
-fi
-
+# ---------------------------------------------------------------
 # Open result
+# ---------------------------------------------------------------
 if command -v xdg-open >/dev/null; then
   xdg-open "$out" >/dev/null 2>&1 &
 else
