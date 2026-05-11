@@ -101,14 +101,92 @@ def parse_weekday(value: str) -> int:
 
 def usage() -> None:
     print("Usage:")
-    print("  days <weekday> [-l|--line] [--color|--no-color]")
+    print("  days <weekday> [-l|--line] [-m N [N ...] | -mN] [-s1|-s2] [-r A B] [--color|--no-color]")
     print("  days --holidays [--color|--no-color]")
     print("")
     print("Examples:")
     print("  days we")
     print("  days fr --line")
     print("  days fr --line --color")
+    print("  days fr -m1")
+    print("  days fr -m 1 2 3 4")
+    print("  days fr -s2")
+    print("  days fr -r 2 6")
     print("  days --holidays")
+    print("")
+    print("Notes:")
+    print("  -m accepts one or more months (1..12). You can use -m1 (no space) or -m 1 2 3.")
+    print("  -s1 shows Jan..Jun, -s2 shows Jul..Dec (no space).")
+    print("  -r A B shows an inclusive month range (e.g., -r 2 6 = Feb..Jun).")
+    print("  If multiple period filters are given, the last one wins (e.g., -s2 then -m 1 2).")
+
+
+def _validate_months(months: list[int]) -> list[int]:
+    out: list[int] = []
+    for m in months:
+        if not (1 <= m <= 12):
+            raise SystemExit(f"Invalid month: {m}. Must be between 1 and 12.")
+        if m not in out:
+            out.append(m)
+    return out
+
+
+def _filter_label_for_months(months: list[int]) -> str:
+    abbr = [calendar.month_abbr[m].lower() for m in months]
+    if not months:
+        return ""
+    if len(months) == 1:
+        return abbr[0]
+    is_contiguous = all(months[i] + 1 == months[i + 1] for i in range(len(months) - 1))
+    return f"{abbr[0]}..{abbr[-1]}" if is_contiguous else ",".join(abbr)
+
+
+def _parse_m_arg(argv: list[str], i: int) -> tuple[list[int], int]:
+    # supports: -m1  OR  -m 1 2 3
+    a = argv[i]
+    months: list[int] = []
+
+    tail = a[2:]
+    if tail:
+        if not tail.isdigit():
+            raise SystemExit(f"Invalid -m value: {a}. Use -m1 or -m 1 2 3.")
+        months.append(int(tail))
+        return _validate_months(months), i
+
+    # -m followed by one or more numbers
+    j = i + 1
+    while j < len(argv) and argv[j].isdigit():
+        months.append(int(argv[j]))
+        j += 1
+
+    months = _validate_months(months)
+    if not months:
+        raise SystemExit("Missing month numbers after -m. Example: -m 1 2 3")
+
+    return months, j - 1  # return last consumed index
+
+
+def _parse_s_arg(a: str) -> list[int]:
+    # supports: -s1 or -s2
+    tail = a[2:]
+    if tail not in ("1", "2"):
+        raise SystemExit("Semester must be -s1 or -s2")
+    return list(range(1, 7)) if tail == "1" else list(range(7, 13))
+
+
+def _parse_r_arg(argv: list[str], i: int) -> tuple[list[int], int]:
+    # supports: -r A B (inclusive)
+    if i + 2 >= len(argv):
+        raise SystemExit("Missing range values. Example: -r 2 6")
+    a1, a2 = argv[i + 1], argv[i + 2]
+    if not (a1.isdigit() and a2.isdigit()):
+        raise SystemExit("Range values must be numbers. Example: -r 2 6")
+    start, end = int(a1), int(a2)
+    if not (1 <= start <= 12 and 1 <= end <= 12):
+        raise SystemExit("Range months must be between 1 and 12.")
+    if start > end:
+        raise SystemExit("Invalid range: start month must be <= end month. Example: -r 2 6")
+    return list(range(start, end + 1)), i + 2  # last consumed index
 
 
 def parse_args(argv: list[str]) -> dict:
@@ -119,26 +197,61 @@ def parse_args(argv: list[str]) -> dict:
     opts = {
         "single_line": False,
         "list_holidays": False,
-        "color": False,      # default: --no-color
+        "color": False,       # ✅ default geral: --no-color
         "weekday_arg": None,
+        "months": None,
+        "filter_label": "",
     }
 
-    for a in argv:
+    color_explicit = False  # ✅ só liga "default color" no --holidays se o user não mexer nisso
+
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+
         if a in ("-l", "--line"):
             opts["single_line"] = True
+
         elif a in ("-H", "--holidays"):
             opts["list_holidays"] = True
+
         elif a == "--color":
             opts["color"] = True
+            color_explicit = True
+
         elif a == "--no-color":
             opts["color"] = False
+            color_explicit = True
+
+        elif a.startswith("-m"):
+            months, i = _parse_m_arg(argv, i)
+            opts["months"] = months
+            opts["filter_label"] = _filter_label_for_months(months)
+
+        elif a.startswith("-s"):
+            months = _parse_s_arg(a)
+            opts["months"] = months
+            opts["filter_label"] = _filter_label_for_months(months)
+
+        elif a == "-r":
+            months, i = _parse_r_arg(argv, i)
+            opts["months"] = months
+            opts["filter_label"] = _filter_label_for_months(months)
+
         elif opts["weekday_arg"] is None:
             opts["weekday_arg"] = a
+
         else:
             usage()
             sys.exit(1)
 
-    # If --holidays is present, weekday is optional; otherwise required
+        i += 1
+
+    # Se --holidays: color ON por padrão, a menos que user tenha passado --color/--no-color
+    if opts["list_holidays"] and not color_explicit:
+        opts["color"] = True
+
+    # weekday obrigatório exceto em --holidays
     if not opts["list_holidays"] and opts["weekday_arg"] is None:
         usage()
         sys.exit(1)
@@ -151,10 +264,14 @@ def parse_args(argv: list[str]) -> dict:
 # ============================================================
 
 def print_all_holidays(year: int, hmap: dict[date, str], *, color: bool) -> None:
+    WD = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+
     print(f"Holidays in {year}:\n")
     for dt in sorted(hmap):
-        dt_str = style(str(dt), color=color)
-        print(f"{dt_str}: {hmap[dt]}")
+        dt_str = dt.strftime("%d/%m")
+        wd_str = WD[dt.weekday()]
+        wd_out = style(wd_str, color=(color and dt.weekday() in (5, 6)))  # only Sa/Su red
+        print(f"{dt_str} {wd_out} : {hmap[dt]}")
 
 
 def month_days_for_weekday(year: int, month: int, weekday: int) -> list[int]:
@@ -165,17 +282,29 @@ def month_days_for_weekday(year: int, month: int, weekday: int) -> list[int]:
     ]
 
 
-def print_calendar_by_weekday(year: int, weekday: int, hmap: dict[date, str], *, single_line: bool, color: bool) -> None:
+def print_calendar_by_weekday(
+    year: int,
+    weekday: int,
+    hmap: dict[date, str],
+    *,
+    single_line: bool,
+    color: bool,
+    months: list[int] | None = None,
+    filter_label: str = "",
+) -> None:
     print(f"Year: {year}")
-    print(f"Weekday: {calendar.day_name[weekday]}\n")
+    print(f"Weekday: {calendar.day_name[weekday]}")
+    if filter_label:
+        print(f"Filter: {filter_label}")
+    print("")
 
-    for month in range(1, 13):
+    months_iter = months if months else range(1, 13)
+
+    for month in months_iter:
         month_name = calendar.month_name[month]
         matching_days = month_days_for_weekday(year, month, weekday)
 
         if single_line:
-            # If --color: holidays are bold+red (no extra char).
-            # If --no-color (default): holidays get a trailing '*' to keep them visible.
             tokens: list[str] = []
             for d in matching_days:
                 dt = date(year, month, d)
@@ -229,6 +358,8 @@ def main() -> None:
         hmap,
         single_line=opts["single_line"],
         color=opts["color"],
+        months=opts["months"],
+        filter_label=opts["filter_label"],
     )
 
 
