@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+BAT_PATH="/sys/class/power_supply"
+
+if [ ! -d "$BAT_PATH" ]; then
+  echo "Power supply information not available."
+  exit 1
+fi
+
+found=false
+
+for bat in "$BAT_PATH"/BAT*; do
+  if [ -d "$bat" ]; then
+    found=true
+    
+    name=$(basename "$bat")
+    capacity=$(cat "$bat/capacity" 2>/dev/null)
+    status=$(cat "$bat/status" 2>/dev/null)
+
+    echo "Battery: $name"
+    echo "  Charge:  $capacity%"
+    echo "  Status:  $status"
+
+    # Optional: show energy info if available
+    if [ -f "$bat/energy_now" ] && [ -f "$bat/energy_full" ]; then
+      energy_now=$(cat "$bat/energy_now")
+      energy_full=$(cat "$bat/energy_full")
+      echo "  Energy:  $energy_now / $energy_full"
+    fi
+
+    echo
+  fi
+done
+
+if [ "$found" = false ]; then
+  echo "No batteries found."
+fi

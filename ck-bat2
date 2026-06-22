@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+BASE="/sys/class/power_supply"
+
+for dev in "$BASE"/*; do
+  name=$(basename "$dev")
+
+  if [[ "$name" == BAT* ]]; then
+    capacity=$(cat "$dev/capacity")
+    status=$(cat "$dev/status")
+    echo "Battery: $name — $capacity% ($status)"
+  fi
+
+  if [[ "$name" == AC* || "$name" == ADP* ]]; then
+    online=$(cat "$dev/online")
+    if [ "$online" = "1" ]; then
+      echo "AC Adapter: Connected"
+    else
+      echo "AC Adapter: Disconnected"
+    fi
+  fi
+done
