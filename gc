@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+# gcm - conventional commit helper
+# Usage: gcm [-h|--help]
+#        gcm [type]
+#        gcm [type] [message]
+#        gcm [type] [scope] [message]
+# type can be a number (from the menu) or the type name itself (e.g. "chore")
+
+set -euo pipefail
+
+# ============================================================
+# PALETTE — raw ANSI codes, don't reference these directly below
+# ============================================================
+RESET="\033[0m"
+
+# normal
+C_BLACK="\033[30m";  
+C_RED="\033[31m";   
+C_GREEN="\033[32m"; 
+C_YELLOW="\033[33m"
+C_BLUE="\033[34m";   
+C_MAGENTA="\033[35m"; 
+C_CYAN="\033[36m"; 
+C_WHITE="\033[37m"
+
+# light / bright
+C_GRAY="\033[90m";     
+C_LRED="\033[91m";     
+C_LGREEN="\033[92m";  
+C_LYELLOW="\033[93m"
+C_LBLUE="\033[94m";    
+C_LMAGENTA="\033[95m"; 
+C_LCYAN="\033[96m";   
+C_LWHITE="\033[97m"
+
+# extras (256-color)
+C_ORANGE="\033[38;5;208m"; 
+C_DORANGE="\033[38;5;166m"
+C_DGREEN="\033[38;5;22m";  
+C_DRED="\033[38;5;88m"; 
+C_DBLUE="\033[38;5;24m"
+
+S_BOLD="\033[1m"; 
+S_DIM="\033[2m"; 
+S_ITALIC="\033[3m"; 
+S_UNDER="\033[4m"; 
+S_NONE=""
+
+
+# ============================================================
+# ROLES — edit THESE to restyle the script. Each role = color + style.
+# ============================================================
+SECTION_LABEL_COLOR="$C_WHITE";    SECTION_LABEL_STYLE="$S_BOLD"   # "Select type:", "Scope", "Commit message"
+TYPE_NAME_COLOR="$C_CYAN";         TYPE_NAME_STYLE="$S_NONE"       # feat / fix / chore / ... in the list
+INDEX_COLOR="$C_GRAY";             INDEX_STYLE="$S_NONE"           # "1 -", "2 -" numbers
+DESCRIPTION_COLOR="$C_GRAY";       DESCRIPTION_STYLE="$S_ITALIC"   # "A new feature", etc
+HINT_COLOR="$C_GRAY";              HINT_STYLE="$S_NONE"            # hints, "#?", "[Y/n]"
+PREVIEW_LABEL_COLOR="$C_GRAY";     PREVIEW_LABEL_STYLE="$S_NONE"   # the word "Preview:"
+COMMAND_COLOR="$C_ORANGE";         COMMAND_STYLE="$S_NONE"         # "git commit -m" itself
+PREVIEW_VALUE_COLOR="$C_WHITE";    PREVIEW_VALUE_STYLE="$S_BOLD"   # the commit message string
+ERROR_COLOR="$C_RED";              ERROR_STYLE="$S_BOLD"           # errors
+WARN_COLOR="$C_YELLOW";            WARN_STYLE="$S_NONE"            # warnings (e.g. nothing to commit)
+SUCCESS_COLOR="$C_GREEN";          SUCCESS_STYLE="$S_NONE"         # success confirmations
+
+# ============================================================
+# Composed sequences (built from roles above — no need to edit)
+# ============================================================
+SECTION_LABEL="${SECTION_LABEL_STYLE}${SECTION_LABEL_COLOR}"
+TYPE_NAME="${TYPE_NAME_STYLE}${TYPE_NAME_COLOR}"
+INDEX="${INDEX_STYLE}${INDEX_COLOR}"
+DESCRIPTION="${DESCRIPTION_STYLE}${DESCRIPTION_COLOR}"
+HINT="${HINT_STYLE}${HINT_COLOR}"
+PREVIEW_LABEL="${PREVIEW_LABEL_STYLE}${PREVIEW_LABEL_COLOR}"
+COMMAND="${COMMAND_STYLE}${COMMAND_COLOR}"
+PREVIEW_VALUE="${PREVIEW_VALUE_STYLE}${PREVIEW_VALUE_COLOR}"
+ERROR="${ERROR_STYLE}${ERROR_COLOR}"
+WARN="${WARN_STYLE}${WARN_COLOR}"
+SUCCESS="${SUCCESS_STYLE}${SUCCESS_COLOR}"
+
+# ============================================================
+# TYPE TABLE — single source of truth. Add a new type by adding one line.
+# format: "name|description"  (bash has no native 2D arrays, this is the
+# idiomatic workaround: one delimited string per "row", split on read)
+# ============================================================
+TYPE_TABLE=(
+  "feat|A new feature"
+  "fix|A bug fix"
+  "chore|Maintenance / tooling changes"
+  "refactor|Code change with no fix or feature"
+  "docs|Documentation only changes"
+  "test|Adding or fixing tests"
+  "style|Formatting, no logic change"
+  "perf|Performance improvement"
+  "build|Build system or dependencies"
+  "ci|CI configuration changes"
+)
+
+types=()
+descriptions=()
+for row in "${TYPE_TABLE[@]}"; do
+  IFS='|' read -r t d <<< "$row"
+  types+=("$t")
+  descriptions+=("$d")
+done
+OTHER_INDEX=$(( ${#types[@]} + 1 ))  # the "other" option is always last
+
+# ============================================================
+# Functions
+# ============================================================
+show_help() {
+  echo -e "${SECTION_LABEL}gcm${RESET} — conventional commit helper"
+  echo
+  echo -e "${SECTION_LABEL}Usage:${RESET}"
+  echo -e "  gcm"
+  echo -e "  gcm ${TYPE_NAME}<type>${RESET}"
+  echo -e "  gcm ${TYPE_NAME}<type>${RESET} <message>"
+  echo -e "  gcm ${TYPE_NAME}<type>${RESET} <scope> <message>"
+  echo -e "  gcm -h | --help"
+  echo
+  echo -e "  ${HINT}<type> can be the menu number OR the type name (e.g. 3 or chore)${RESET}"
+  echo
+  echo -e "${SECTION_LABEL}What it does:${RESET}"
+  echo -e "  Prompts for a ${TYPE_NAME}type${RESET}, optional ${SECTION_LABEL}scope${RESET}, and a ${SECTION_LABEL}message${RESET},"
+  echo -e "  then runs:"
+  echo -e "  ${COMMAND}git commit -m${RESET} ${HINT}\"type(scope): message\"${RESET}"
+  echo
+  echo -e "${SECTION_LABEL}Available types:${RESET}"
+  print_menu
+  echo
+  echo -e "${SECTION_LABEL}Examples:${RESET}"
+  echo -e "  ${HINT}\$ gcm${RESET}"
+  echo -e "  ${HINT}\$ gcm chore${RESET}"
+  echo -e "  ${HINT}\$ gcm 2 \"Show path in verbose mode\"${RESET}"
+  echo -e "  ${HINT}\$ gcm fix repos \"Show path in verbose mode\"${RESET}"
+  echo -e "  ${HINT}→ ${COMMAND}git commit -m${RESET} ${PREVIEW_VALUE}\"fix(repos): Show path in verbose mode\"${RESET}"
+}
+
+print_menu() {
+  for i in "${!types[@]}"; do
+    printf "  ${INDEX}%2d - ${TYPE_NAME}%-9s${RESET} ${DESCRIPTION}%s${RESET}\n" \
+      "$((i+1))" "${types[$i]}" "${descriptions[$i]}"
+  done
+  printf "  ${INDEX}%2d - ${TYPE_NAME}%-9s${RESET} ${DESCRIPTION}%s${RESET}\n" \
+    "$OTHER_INDEX" "other" "Type your own"
+}
+
+# resolve a type given as arg (number or name) -> echoes resolved type name, or empty if invalid
+resolve_type_arg() {
+  local arg="$1" idx
+  if [[ "$arg" =~ ^[0-9]+$ ]]; then
+    idx=$((arg-1))
+    if (( idx >= 0 && idx < ${#types[@]} )); then
+      echo "${types[$idx]}"
+      return 0
+    fi
+    return 1
+  fi
+  # accept the literal name, whether it's in the table or a custom one
+  echo "$arg"
+  return 0
+}
+
+read_choice_interactive() {
+  local num idx custom
+  while true; do
+    read -rp "$(echo -e "${HINT}#?${RESET} ")" num
+    if [[ "$num" =~ ^[0-9]+$ ]]; then
+      idx=$((num-1))
+      if (( num == OTHER_INDEX )); then
+        read -rp "$(echo -e "${SECTION_LABEL}Enter custom type${RESET}: ")" custom
+        if [[ -n "$custom" ]]; then
+          echo "$custom"
+          return 0
+        fi
+        echo -e "${ERROR}Type can't be empty.${RESET}" >&2
+        continue
+      elif (( idx >= 0 && idx < ${#types[@]} )); then
+        echo "${types[$idx]}"
+        return 0
+      fi
+    fi
+    echo -e "${ERROR}Invalid choice, try again.${RESET}" >&2
+  done
+}
+
+check_git_repo() {
+  if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    echo -e "${ERROR}Not a git repository.${RESET}" >&2
+    exit 1
+  fi
+  if [[ -z "$(git status --porcelain)" ]]; then
+    echo -e "${WARN}Nothing to commit — working tree is clean.${RESET}"
+    exit 0
+  fi
+}
+
+read_nonempty() {
+  local prompt="$1" value
+  while true; do
+    read -rp "$(echo -e "$prompt")" value
+    [[ -n "$value" ]] && { echo "$value"; return 0; }
+    echo -e "${ERROR}This field is required.${RESET}" >&2
+  done
+}
+
+# ============================================================
+# Main
+# ============================================================
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  show_help
+  exit 0
+fi
+
+check_git_repo
+
+type=""
+scope=""
+msg=""
+
+case "$#" in
+  0)
+    echo -e "${SECTION_LABEL}Select type:${RESET}"
+    print_menu
+    type=$(read_choice_interactive)
+    scope=$(read -rp "$(echo -e "${SECTION_LABEL}Scope${RESET} ${HINT}(optional, no parens)${RESET}: ")" scope; echo "$scope")
+    msg=$(read_nonempty "${SECTION_LABEL}Commit message${RESET}: ")
+    ;;
+  1)
+    if ! type=$(resolve_type_arg "$1"); then
+      echo -e "${ERROR}Invalid type: $1${RESET}" >&2
+      exit 1
+    fi
+    scope=$(read -rp "$(echo -e "${SECTION_LABEL}Scope${RESET} ${HINT}(optional, no parens)${RESET}: ")" scope; echo "$scope")
+    msg=$(read_nonempty "${SECTION_LABEL}Commit message${RESET}: ")
+    ;;
+  2)
+    if ! type=$(resolve_type_arg "$1"); then
+      echo -e "${ERROR}Invalid type: $1${RESET}" >&2
+      exit 1
+    fi
+    msg="$2"
+    [[ -z "$msg" ]] && { echo -e "${ERROR}Commit message can't be empty.${RESET}" >&2; exit 1; }
+    ;;
+  3)
+    if ! type=$(resolve_type_arg "$1"); then
+      echo -e "${ERROR}Invalid type: $1${RESET}" >&2
+      exit 1
+    fi
+    scope="$2"
+    msg="$3"
+    [[ -z "$msg" ]] && { echo -e "${ERROR}Commit message can't be empty.${RESET}" >&2; exit 1; }
+    ;;
+  *)
+    echo -e "${ERROR}Too many arguments.${RESET}" >&2
+    show_help
+    exit 1
+    ;;
+esac
+
+if [[ -n "$scope" ]]; then
+  header="${type}(${scope}): ${msg}"
+else
+  header="${type}: ${msg}"
+fi
+
+echo
+echo -e "${PREVIEW_LABEL}Preview:${RESET}"
+echo -e "  ${COMMAND}git commit -m${RESET} ${PREVIEW_VALUE}\"${header}\"${RESET}"
+echo
+read -rp "$(echo -e "${SECTION_LABEL}Commit with this message?${RESET} ${HINT}[Y/n]${RESET} ")" confirm
+[[ "$confirm" =~ ^[Nn]$ ]] && exit 1
+
+git commit -m "$header"
+echo -e "${SUCCESS}Committed.${RESET}"
