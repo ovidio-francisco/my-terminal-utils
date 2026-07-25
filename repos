@@ -12,6 +12,7 @@ COL_ICON="${COL_ICON:-4}"
 COL_NAME="${COL_NAME:-22}"
 COL_BRANCH="${COL_BRANCH:-12}"
 COL_CHANGES="${COL_CHANGES:-13}"
+COL_SYNC="${COL_SYNC:-18}"
 
 SCAN_DEPTH="${SCAN_DEPTH:-4}"
 
@@ -92,31 +93,46 @@ EOF
 die() { echo "$*" >&2; exit 1; }
 is_number() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 
+# Display helper: collapse the home directory prefix to ~ (cosmetic only,
+# doesn't affect any path actually used for filesystem/git operations).
+display_path() {
+  local path="$1"
+  if [[ "$path" == "$HOME" ]]; then
+    printf '~'
+  elif [[ "$path" == "$HOME"/* ]]; then
+    printf '~/%s' "${path#"$HOME"/}"
+  else
+    printf '%s' "$path"
+  fi
+}
+
 # ============================================================
 # Option parsing (supports bundled flags: -vdp)
 # ============================================================
 parse_args() {
-  while [[ "${1:-}" == -* ]]; do
-    case "$1" in
-      --) shift; break ;;
+  local args=("$@") i=0 arg
+
+  while ((i < ${#args[@]})); do
+    arg="${args[i]}"
+    case "$arg" in
+      --)
+        ((++i))
+        ((i < ${#args[@]})) && selector="${args[i]}"
+        ;;
       -h|--help) usage; exit 0 ;;
-      -p|--path) show_path=1; shift ;;
+      -p|--path) show_path=1 ;;
       --sort)
-        shift
-        sort_mode="${1:-}"
+        ((++i))
+        sort_mode="${args[i]:-}"
         [[ -n "$sort_mode" ]] || die "Missing value for --sort (name|changes|dirty|default)"
-        shift || true
         ;;
       --sort=*)
-        sort_mode="${1#--sort=}"
-        shift
+        sort_mode="${arg#--sort=}"
         ;;
       -*)
-        local flags="${1#-}"
-        shift
-        local i c
-        for ((i = 0; i < ${#flags}; i++)); do
-          c="${flags:i:1}"
+        local flags="${arg#-}" j c
+        for ((j = 0; j < ${#flags}; j++)); do
+          c="${flags:j:1}"
           case "$c" in
             v) verbose=1 ;;
             l) list_files=1 ;;
@@ -128,10 +144,12 @@ parse_args() {
           esac
         done
         ;;
+      *)
+        selector="$arg"
+        ;;
     esac
+    ((++i))
   done
-
-  selector="${1:-}"
 
   # -f overrides -l
   [[ "$files_dirty_only" == 1 ]] && list_files=0
@@ -319,6 +337,20 @@ format_changes_colored() {
   fi
 }
 
+format_sync_plain() {
+  local ahead="${1:-}" behind="${2:-}"
+
+  if [[ -n "$ahead" || -n "$behind" ]]; then
+    ahead="${ahead:-0}"
+    behind="${behind:-0}"
+    [[ "$ahead" == "0" && "$behind" == "0" ]] && { printf 'UP-TO-DATE'; return; }
+    printf 'AHEAD:%s BEHIND:%s' "$ahead" "$behind"
+    return
+  fi
+
+  printf 'NO-UPSTREAM'
+}
+
 format_sync_colored() {
   local ahead="${1:-}" behind="${2:-}"
 
@@ -375,11 +407,7 @@ print_verbose() {
   changes_label="$(format_changes_colored "$changes_count" "$(format_changes_plain "$changes_count")")"
 
   printf "%b\n" "${BOLD}${ICON_REPO}${name}${RESET}"
-
-  # show path only if requested (otherwise keep your original output)
-  if [[ "$show_path" == 1 ]]; then
-    printf "  %s\n" "$where"
-  fi
+  printf "  path:      ${GRAY}%s${RESET}\n" "$(display_path "$where")"
 
   printf "  branch:    ${BOLD}${GRAY}%s${RESET}\n" "$branch"
   printf "  upstream:  ${GRAY}%s${RESET}\n" "${upstream:-NO-UPSTREAM}"
@@ -418,14 +446,20 @@ print_short() {
   branch_p="$(fit_column "$branch" "$COL_BRANCH")"
   changes_p="$(fit_column "$(format_changes_plain "$changes_count")" "$COL_CHANGES")"
   changes_colored="$(format_changes_colored "$changes_count" "$changes_p")"
+
+  local sync_plain sync_pad
+  sync_plain="$(format_sync_plain "$ahead" "$behind")"
   sync_colored="$(format_sync_colored "$ahead" "$behind")"
+  sync_pad=$((COL_SYNC - ${#sync_plain}))
+  ((sync_pad < 0)) && sync_pad=0
+  sync_colored+="$(printf '%*s' "$sync_pad" '')"
 
   local line
   line="$(printf "${GRAY}%s${RESET} ${GRAY}-${RESET} %s${BOLD}%s${RESET} ${BOLD}${GRAY}%s${RESET} %b %b" \
     "$idx_p" "$icon_p" "$name_p" "$branch_p" "$changes_colored" "$sync_colored")"
 
   if [[ "$show_path" == 1 ]]; then
-    line+="$(printf " ${GRAY}%s${RESET}" "$where")"
+    line+="$(printf " ${GRAY}%s${RESET}" "$(display_path "$where")")"
   fi
 
   printf "%b\n" "$line"
