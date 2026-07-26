@@ -87,7 +87,6 @@ for row in "${TYPE_TABLE[@]}"; do
   types+=("$t")
   descriptions+=("$d")
 done
-OTHER_INDEX=$(( ${#types[@]} + 1 ))  # the "other" option is always last
 
 # ============================================================
 # Functions
@@ -101,8 +100,11 @@ show_help() {
   echo -e "  gc ${TYPE_NAME}<type>${RESET} <message>"
   echo -e "  gc ${TYPE_NAME}<type>${RESET} <scope> <message>"
   echo -e "  gc -h | --help"
+  echo -e "  gc -n | --dry-run [type] ..."
   echo
   echo -e "  ${HINT}<type> can be the menu number OR the type name (e.g. 3 or chore)${RESET}"
+  echo -e "  ${HINT}-n/--dry-run skips the repo/staged checks and prints the commit${RESET}"
+  echo -e "  ${HINT}command instead of running it — handy for testing outside a repo.${RESET}"
   echo
   echo -e "${SECTION_LABEL}What it does:${RESET}"
   echo -e "  Prompts for a ${TYPE_NAME}type${RESET}, optional ${SECTION_LABEL}scope${RESET}, and a ${SECTION_LABEL}message${RESET},"
@@ -125,8 +127,6 @@ print_menu() {
     printf "  ${INDEX}%2d - ${TYPE_NAME}%-9s${RESET} ${DESCRIPTION}%s${RESET}\n" \
       "$((i+1))" "${types[$i]}" "${descriptions[$i]}"
   done
-  printf "  ${INDEX}%2d - ${TYPE_NAME}%-9s${RESET} ${DESCRIPTION}%s${RESET}\n" \
-    "$OTHER_INDEX" "other" "Type your own"
 }
 
 # resolve a type given as arg (number or name) -> echoes resolved type name, or empty if invalid
@@ -146,7 +146,7 @@ resolve_type_arg() {
 }
 
 read_choice_interactive() {
-  local num idx custom
+  local num idx
   while true; do
     read -rp "$(echo -e "${HINT}#?${RESET} ")" num
     if [[ -z "$num" ]]; then
@@ -154,15 +154,7 @@ read_choice_interactive() {
     fi
     if [[ "$num" =~ ^[0-9]+$ ]]; then
       idx=$((num-1))
-      if (( num == OTHER_INDEX )); then
-        read -rp "$(echo -e "${SECTION_LABEL}Enter custom type${RESET}: ")" custom
-        if [[ -n "$custom" ]]; then
-          chosen_type="$custom"
-          return 0
-        fi
-        echo -e "${ERROR}Type can't be empty.${RESET}" >&2
-        continue
-      elif (( idx >= 0 && idx < ${#types[@]} )); then
+      if (( idx >= 0 && idx < ${#types[@]} )); then
         chosen_type="${types[$idx]}"
         return 0
       fi
@@ -177,6 +169,8 @@ read_choice_interactive() {
 }
 
 check_git_repo() {
+  (( dry_run )) && return 0
+
   if ! git rev-parse --is-inside-work-tree &>/dev/null; then
     echo -e "${ERROR}Not a git repository.${RESET}" >&2
     exit 1
@@ -204,10 +198,16 @@ read_nonempty() {
 # ============================================================
 # Main
 # ============================================================
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  show_help
-  exit 0
-fi
+dry_run=0
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) show_help; exit 0 ;;
+    -n|--dry-run) dry_run=1 ;;
+    *) args+=("$arg") ;;
+  esac
+done
+set -- "${args[@]}"
 
 check_git_repo
 
@@ -271,5 +271,10 @@ echo
 read -rp "$(echo -e "${SECTION_LABEL}Commit with this message?${RESET} ${HINT}[Y/n]${RESET} ")" confirm
 [[ "$confirm" =~ ^[Nn]$ ]] && exit 1
 
-git commit -m "$header"
-echo -e "${SUCCESS}Committed.${RESET}"
+if (( dry_run )); then
+  echo -e "${HINT}[dry-run] would run:${RESET}"
+  echo -e "  ${COMMAND}git commit -m${RESET} \"${header}\""
+else
+  git commit -m "$header"
+  echo -e "${SUCCESS}Committed.${RESET}"
+fi
