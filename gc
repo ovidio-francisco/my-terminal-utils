@@ -166,8 +166,13 @@ read_choice_interactive() {
         chosen_type="${types[$idx]}"
         return 0
       fi
+      echo -e "${ERROR}Invalid choice, try again.${RESET}" >&2
+      continue
     fi
-    echo -e "${ERROR}Invalid choice, try again.${RESET}" >&2
+
+    # not a number — accept it as a literal type name, same as CLI args do
+    chosen_type="$num"
+    return 0
   done
 }
 
@@ -179,6 +184,11 @@ check_git_repo() {
   if [[ -z "$(git status --porcelain)" ]]; then
     echo -e "${WARN}Nothing to commit — working tree is clean.${RESET}"
     exit 0
+  fi
+  if git diff --cached --quiet; then
+    echo -e "${WARN}Nothing staged for commit.${RESET}" >&2
+    echo -e "${HINT}Stage something first with 'git add <file>' (or 'git add -A' for everything).${RESET}" >&2
+    exit 1
   fi
 }
 
