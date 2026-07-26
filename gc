@@ -217,7 +217,7 @@ msg=""
 
 case "$#" in
   0)
-    echo -e "${SECTION_LABEL}Select type:${RESET}"
+    echo -e "${SECTION_LABEL}Select a type, or enter your own:${RESET}"
     print_menu
 	read_choice_interactive
 	type="$chosen_type"
