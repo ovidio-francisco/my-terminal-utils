@@ -471,10 +471,20 @@ render_problems() {
   local i n="${#P_NAME[@]}"
   [[ "$n" -eq 0 ]] && return 0
 
+  # Size the name/message fields to whatever's actually being shown this
+  # run, rather than trying to line up with the repo table's columns.
+  local name_w=0 msg_w=0 len
+  for ((i = 0; i < n; i++)); do
+    len="${#P_NAME[$i]}"
+    ((len > name_w)) && name_w="$len"
+    len="${#P_MSG[$i]}"
+    ((len > msg_w)) && msg_w="$len"
+  done
+
   printf "\n"
   for ((i = 0; i < n; i++)); do
-    printf "%b\n" "$(printf "%s${YELLOW}%-${COL_NAME}s${RESET} ${RED}%s${RESET}" \
-      "$(pad_icon "${P_ICON[$i]}")" "${P_NAME[$i]}" "${P_MSG[$i]}")"
+    printf "%b\n" "$(printf "%s${YELLOW}%-*s${RESET} ${GRAY}[${RESET} ${RED}%-*s${RESET} ${GRAY}]${RESET}" \
+      "$(pad_icon "${P_ICON[$i]}")" "$name_w" "${P_NAME[$i]}" "$msg_w" "${P_MSG[$i]}")"
   done
 }
 
