@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# battery_status.sh — shows power/battery status at 3 detail levels
+# batstat — shows power/battery status at 3 detail levels
 #
 # Usage:
 #   battery_status.sh [-l LEVEL] [-s|-i|-v] [-h]
