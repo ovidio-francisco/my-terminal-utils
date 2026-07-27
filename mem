@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+#
+# mem_status.sh — shows RAM/swap memory status at 3 detail levels
+#
+# Usage:
+#   mem_status.sh [-l LEVEL] [-s|-i|-v] [-h]
+#
+#   -l, --level N        1=simple (default), 2=intermediate, 3=verbose
+#   -s, --simple         shortcut for -l 1
+#   -i, --intermediate   shortcut for -l 2
+#   -v, --verbose        shortcut for -l 3
+#   -h, --help           show this help
+
+set -uo pipefail
+
+MEMINFO="/proc/meminfo"
+LEVEL=1
+
+# ---------------------------------------------------------------------------
+# Colors / styles (disabled when output isn't a terminal)
+# ---------------------------------------------------------------------------
+if [[ -t 1 ]]; then
+  BOLD=$'\e[1m'; DIM=$'\e[2m'; RESET=$'\e[0m'
+  RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'
+  BLUE=$'\e[34m'; CYAN=$'\e[36m'; MAGENTA=$'\e[35m'; GRAY=$'\e[90m'
+else
+  BOLD=""; DIM=""; RESET=""
+  RED=""; GREEN=""; YELLOW=""; BLUE=""; CYAN=""; MAGENTA=""; GRAY=""
+fi
+
+# ---------------------------------------------------------------------------
+# Help / argument parsing
+# ---------------------------------------------------------------------------
+usage() {
+  cat <<EOF
+${BOLD}mem_status.sh${RESET} — RAM/swap memory status
+
+Usage: $(basename "$0") [-l LEVEL] [--simple|--intermediate|--verbose] [-h]
+
+  -l, --level N          Detail level: 1=simple (default), 2=intermediate, 3=verbose
+  -s, --simple           Shortcut for -l 1
+  -i, --intermediate     Shortcut for -l 2
+  -v, --verbose          Shortcut for -l 3
+  -h, --help             Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -l|--level)
+      LEVEL="${2:-}"
+      shift 2
+      ;;
+    -s|--simple) LEVEL=1; shift ;;
+    -i|--intermediate) LEVEL=2; shift ;;
+    -v|--verbose) LEVEL=3; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "${RED}Unknown option: $1${RESET}" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if ! [[ "$LEVEL" =~ ^[1-3]$ ]]; then
+  echo "${RED}Invalid level: '$LEVEL' (use 1, 2 or 3)${RESET}" >&2
+  exit 1
+fi
+
+if [[ ! -r "$MEMINFO" ]]; then
+  echo "${RED}Memory information not available on this system.${RESET}"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+is_number() { [[ "$1" =~ ^-?[0-9]+$ ]]; }
+
+# Human-readable size from a value in kB (e.g. 2043904 -> "2.0 GB")
+human_kb() {
+  local kb="$1"
+  is_number "$kb" || { echo "N/A"; return; }
+  awk -v kb="$kb" 'BEGIN{
+    if (kb >= 1048576)      printf "%.1f GB", kb/1048576;
+    else if (kb >= 1024)    printf "%.1f MB", kb/1024;
+    else                    printf "%d KB", kb;
+  }'
+}
+
+# Color based on usage percentage — inverted vs. battery: high usage is bad.
+color_for_usage() {
+  local pct="$1"
+  if is_number "$pct"; then
+    if   (( pct >= 90 )); then echo "$RED"
+    elif (( pct >= 70 )); then echo "$YELLOW"
+    else echo "$GREEN"
+    fi
+  else
+    echo "$GRAY"
+  fi
+}
+
+# Progress bar: progress_bar 42 20 -> [########------------]
+# Always renders the same total width, even without numeric data.
+progress_bar() {
+  local pct="$1" width="${2:-20}"
+  local filled=0
+  if is_number "$pct"; then
+    filled=$(( pct * width / 100 ))
+    (( filled > width )) && filled=$width
+    (( filled < 0 )) && filled=0
+  fi
+  local empty=$(( width - filled ))
+  printf '['
+  printf '%*s' "$filled" '' | tr ' ' '#'
+  printf '%*s' "$empty" '' | tr ' ' '-'
+  printf ']'
+}
+
+# Colored percentage OR a right-aligned "N/A" placeholder, same width.
+# Used after the progress bar (levels 2/3), where a fixed width keeps
+# numbers lining up between the Mem and Swap blocks.
+format_pct() {
+  local pct="$1"
+  if is_number "$pct"; then
+    printf "%s%3s%%%s" "$(color_for_usage "$pct")" "$pct" "$RESET"
+  else
+    printf "%s%4s%s" "$GRAY" "N/A" "$RESET"
+  fi
+}
+
+# Same as format_pct but flush-left, no padding. Used in level 1 (simple),
+# where nothing follows the value on the line.
+format_pct_plain() {
+  local pct="$1"
+  if is_number "$pct"; then
+    printf "%s%s%%%s" "$(color_for_usage "$pct")" "$pct" "$RESET"
+  else
+    printf "%sN/A%s" "$GRAY" "$RESET"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Read /proc/meminfo into an associative array (values normalized to kB)
+# ---------------------------------------------------------------------------
+declare -A MEM
+while IFS=':' read -r key rest; do
+  [[ -n "$key" ]] || continue
+  value="$(tr -dc '0-9' <<< "$rest")"
+  MEM["$key"]="$value"
+done < "$MEMINFO"
+
+get() { local k="$1"; echo "${MEM[$k]:-}"; }
+
+mem_total="$(get MemTotal)"
+mem_free="$(get MemFree)"
+mem_available="$(get MemAvailable)"
+buffers="$(get Buffers)"
+cached="$(get Cached)"
+sreclaimable="$(get SReclaimable)"
+shmem="$(get Shmem)"
+active="$(get Active)"
+inactive="$(get Inactive)"
+dirty="$(get Dirty)"
+writeback="$(get Writeback)"
+slab="$(get Slab)"
+mapped="$(get Mapped)"
+committed_as="$(get Committed_AS)"
+commit_limit="$(get CommitLimit)"
+huge_total="$(get HugePages_Total)"
+huge_free="$(get HugePages_Free)"
+huge_size="$(get Hugepagesize)"
+
+swap_total="$(get SwapTotal)"
+swap_free="$(get SwapFree)"
+swap_cached="$(get SwapCached)"
+
+if [[ -z "$mem_total" ]]; then
+  echo "${RED}Could not parse MemTotal from $MEMINFO.${RESET}"
+  exit 1
+fi
+
+# MemAvailable was added in kernel 3.14; fall back to a rough estimate.
+if [[ -z "$mem_available" ]]; then
+  mem_available=$(( mem_free + buffers + cached ))
+fi
+
+mem_used=$(( mem_total - mem_available ))
+(( mem_used < 0 )) && mem_used=0
+mem_pct="$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN{ if(t>0) printf "%d", (u*100)/t; else print "" }')"
+
+# buff/cache the way `free` reports it: reclaimable cache, minus shmem
+# (shmem is "in cache" but not actually reclaimable/free).
+buff_cache=$(( buffers + cached + sreclaimable - shmem ))
+(( buff_cache < 0 )) && buff_cache=0
+
+if [[ -n "$swap_total" && "$swap_total" -gt 0 ]]; then
+  swap_used=$(( swap_total - swap_free ))
+  (( swap_used < 0 )) && swap_used=0
+  swap_pct="$(awk -v u="$swap_used" -v t="$swap_total" 'BEGIN{ printf "%d", (u*100)/t }')"
+  has_swap=true
+else
+  swap_used=""
+  swap_pct=""
+  has_swap=false
+fi
+
+# ---------------------------------------------------------------------------
+# Level 1 — Simple: just Mem% (and Swap%, if present)
+# ---------------------------------------------------------------------------
+print_simple() {
+  printf "%-6s %s\n" "Mem:" "$(format_pct_plain "$mem_pct")"
+  if [[ "$has_swap" == true ]]; then
+    printf "%-6s %s\n" "Swap:" "$(format_pct_plain "$swap_pct")"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Level 2 — Intermediate: + progress bar, used/available/total
+# ---------------------------------------------------------------------------
+print_intermediate() {
+  printf "%sMemory%s\n" "$BOLD" "$RESET"
+  printf "  %-12s %s %s\n" "Usage:" "$(progress_bar "$mem_pct")" "$(format_pct "$mem_pct")"
+  printf "  %-12s %s / %s\n" "Used:" "$(human_kb "$mem_used")" "$(human_kb "$mem_total")"
+  printf "  %-12s %s\n" "Available:" "$(human_kb "$mem_available")"
+  echo
+
+  if [[ "$has_swap" == true ]]; then
+    printf "%sSwap%s\n" "$BOLD" "$RESET"
+    printf "  %-12s %s %s\n" "Usage:" "$(progress_bar "$swap_pct")" "$(format_pct "$swap_pct")"
+    printf "  %-12s %s / %s\n" "Used:" "$(human_kb "$swap_used")" "$(human_kb "$swap_total")"
+  else
+    printf "%sSwap%s\n" "$BOLD" "$RESET"
+    printf "  %-12s %s\n" "Status:" "${GRAY}Not configured${RESET}"
+  fi
+  echo
+}
+
+# ---------------------------------------------------------------------------
+# Level 3 — Verbose: everything relevant from /proc/meminfo
+# ---------------------------------------------------------------------------
+print_verbose() {
+  echo "${CYAN}────────────────────────────────────────${RESET}"
+  printf "%sMemory%s\n" "$BOLD" "$RESET"
+  echo "${CYAN}────────────────────────────────────────${RESET}"
+  printf "  %-16s %s %s\n" "Usage:" "$(progress_bar "$mem_pct")" "$(format_pct "$mem_pct")"
+  printf "  %-16s %s\n" "Total:" "$(human_kb "$mem_total")"
+  printf "  %-16s %s\n" "Used:" "$(human_kb "$mem_used")"
+  printf "  %-16s %s\n" "Free:" "$(human_kb "$mem_free")"
+  printf "  %-16s %s\n" "Available:" "$(human_kb "$mem_available")"
+  printf "  %-16s %s\n" "Buff/Cache:" "$(human_kb "$buff_cache")"
+  [[ -n "$buffers"      ]] && printf "  %-16s %s\n" "Buffers:" "$(human_kb "$buffers")"
+  [[ -n "$cached"       ]] && printf "  %-16s %s\n" "Cached:" "$(human_kb "$cached")"
+  [[ -n "$sreclaimable" ]] && printf "  %-16s %s\n" "Slab reclaim.:" "$(human_kb "$sreclaimable")"
+  [[ -n "$shmem"        ]] && printf "  %-16s %s\n" "Shared:" "$(human_kb "$shmem")"
+  [[ -n "$active"       ]] && printf "  %-16s %s\n" "Active:" "$(human_kb "$active")"
+  [[ -n "$inactive"     ]] && printf "  %-16s %s\n" "Inactive:" "$(human_kb "$inactive")"
+  [[ -n "$mapped"       ]] && printf "  %-16s %s\n" "Mapped:" "$(human_kb "$mapped")"
+  [[ -n "$dirty"        ]] && printf "  %-16s %s\n" "Dirty:" "$(human_kb "$dirty")"
+  [[ -n "$writeback"    ]] && printf "  %-16s %s\n" "Writeback:" "$(human_kb "$writeback")"
+  [[ -n "$slab"         ]] && printf "  %-16s %s\n" "Slab (total):" "$(human_kb "$slab")"
+  if [[ -n "$committed_as" && -n "$commit_limit" ]]; then
+    printf "  %-16s %s / %s\n" "Committed:" "$(human_kb "$committed_as")" "$(human_kb "$commit_limit")"
+  fi
+  if [[ -n "$huge_total" && "$huge_total" -gt 0 ]] 2>/dev/null; then
+    printf "  %-16s %s free / %s total (%s each)\n" "HugePages:" "$huge_free" "$huge_total" "$(human_kb "$huge_size")"
+  fi
+  echo
+
+  echo "${CYAN}────────────────────────────────────────${RESET}"
+  printf "%sSwap%s\n" "$BOLD" "$RESET"
+  echo "${CYAN}────────────────────────────────────────${RESET}"
+  if [[ "$has_swap" == true ]]; then
+    printf "  %-16s %s %s\n" "Usage:" "$(progress_bar "$swap_pct")" "$(format_pct "$swap_pct")"
+    printf "  %-16s %s\n" "Total:" "$(human_kb "$swap_total")"
+    printf "  %-16s %s\n" "Used:" "$(human_kb "$swap_used")"
+    printf "  %-16s %s\n" "Free:" "$(human_kb "$swap_free")"
+    [[ -n "$swap_cached" ]] && printf "  %-16s %s\n" "Cached:" "$(human_kb "$swap_cached")"
+  else
+    printf "  %-16s %s\n" "Status:" "${GRAY}Not configured${RESET}"
+  fi
+  echo
+}
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+case "$LEVEL" in
+  1) print_simple ;;
+  2) print_intermediate ;;
+  3) print_verbose ;;
+esac
