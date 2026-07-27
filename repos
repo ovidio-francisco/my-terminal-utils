@@ -93,6 +93,21 @@ EOF
 die() { echo "$*" >&2; exit 1; }
 is_number() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 
+# Some tools/filesystems (notably macOS) store accented characters as a
+# base letter + combining mark (NFD) rather than a single precomposed
+# codepoint (NFC) — e.g. "ê" as "e" + ◌̂. Bash's ${#var} counts codepoints,
+# so an NFD name looks one character longer per accent than it actually
+# renders, throwing off column padding. Normalize to NFC wherever names
+# are read so width calculations match what's on screen.
+normalize_nfc() {
+  local text="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys, unicodedata; sys.stdout.write(unicodedata.normalize("NFC", sys.argv[1]))' "$text"
+  else
+    printf '%s' "$text"
+  fi
+}
+
 # Display helper: collapse the home directory prefix to ~ (cosmetic only,
 # doesn't affect any path actually used for filesystem/git operations).
 display_path() {
@@ -180,6 +195,7 @@ seen_add_or_skip() {
 # Problems (deferred to the end)
 # ============================================================
 declare -a P_ICON P_NAME P_MSG
+P_ICON=(); P_NAME=(); P_MSG=()
 
 add_problem() {
   P_ICON+=("$1")
@@ -295,7 +311,7 @@ changes_count_from_status() {
 # with trailing spaces if it's shorter. Keeps table columns aligned
 # regardless of content length.
 fit_column() {
-  local text="$1" width="$2" len="${#1}"
+  local text="$1" width="$2" len="${#1}" pad
   if ((len > width)); then
     if ((width > 1)); then
       printf '%s' "${text:0:width - 1}…"
@@ -303,7 +319,12 @@ fit_column() {
       printf '%s' "${text:0:width}"
     fi
   else
-    printf '%-*s' "$width" "$text"
+    # printf '%-*s' pads to a *byte* width, not a character width, so
+    # multi-byte UTF-8 text (e.g. accented letters) ends up under-padded.
+    # Compute the pad count ourselves from bash's character-aware ${#text}
+    # and fill it with plain ASCII spaces instead.
+    pad=$((width - len))
+    printf '%s%*s' "$text" "$pad" ''
   fi
 }
 
@@ -482,9 +503,12 @@ render_problems() {
   done
 
   printf "\n"
+  local name_field msg_field
   for ((i = 0; i < n; i++)); do
-    printf "%b\n" "$(printf "%s${YELLOW}%-*s${RESET} ${GRAY}[${RESET} ${RED}%-*s${RESET} ${GRAY}]${RESET}" \
-      "$(pad_icon "${P_ICON[$i]}")" "$name_w" "${P_NAME[$i]}" "$msg_w" "${P_MSG[$i]}")"
+    name_field="$(fit_column "${P_NAME[$i]}" "$name_w")"
+    msg_field="$(fit_column "${P_MSG[$i]}" "$msg_w")"
+    printf "%b\n" "$(printf "%s${YELLOW}%s${RESET} ${GRAY}[${RESET} ${RED}%s${RESET} ${GRAY}]${RESET}" \
+      "$(pad_icon "${P_ICON[$i]}")" "$name_field" "$msg_field")"
   done
 }
 
@@ -507,7 +531,9 @@ discover_repos_under() {
 # Storage
 # ============================================================
 declare -a R_NAME R_WHERE R_STATUS R_LAST
+R_NAME=(); R_WHERE=(); R_STATUS=(); R_LAST=()
 declare -a ORDER # indices (0-based) controlling display order
+ORDER=()
 
 add_entry() {
   R_NAME+=("$1")
@@ -599,7 +625,7 @@ collect_from_normal_repo() {
   local status last
   status="$(git_status_normal "$path")"
   last="$(git_last_normal "$path")"
-  add_entry "$(basename "$path")" "$path" "$status" "$last"
+  add_entry "$(normalize_nfc "$(basename "$path")")" "$path" "$status" "$last"
 }
 
 collect_from_bare_entry() {
@@ -614,7 +640,7 @@ collect_from_bare_entry() {
   status="$(augment_bare_status_if_needed "$gitdir" "$worktree" "$status")"
   last="$(git_last_bare "$gitdir" "$worktree")"
 
-  add_entry "$name" "$worktree" "$status" "$last"
+  add_entry "$(normalize_nfc "$name")" "$worktree" "$status" "$last"
 }
 
 collect_from_line() {
@@ -635,7 +661,7 @@ collect_from_line() {
 
   local repo="$line"
   if [[ ! -d "$repo" ]]; then
-    print_problem "$ICON_ERROR" "$(basename "$repo")" "NOT-FOUND"
+    print_problem "$ICON_ERROR" "$(normalize_nfc "$(basename "$repo")")" "NOT-FOUND"
     return 0
   fi
 
@@ -648,7 +674,7 @@ collect_from_line() {
       collect_from_normal_repo "$subrepo"
     done < <(discover_repos_under "$repo")
 
-    [[ "$found_any" == 0 ]] && print_problem "$ICON_WARNING" "$(basename "$repo")" "NOT-A-REPO"
+    [[ "$found_any" == 0 ]] && print_problem "$ICON_WARNING" "$(normalize_nfc "$(basename "$repo")")" "NOT-A-REPO"
     return 0
   fi
 
