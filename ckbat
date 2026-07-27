@@ -1,0 +1,354 @@
+#!/usr/bin/env bash
+#
+# battery_status.sh — shows power/battery status at 3 detail levels
+#
+# Usage:
+#   battery_status.sh [-l LEVEL] [-s|-i|-v] [-h]
+#
+#   -l, --level N        1=simple (default), 2=intermediate, 3=verbose
+#   -s, --simple         shortcut for -l 1
+#   -i, --intermediate   shortcut for -l 2
+#   -v, --verbose        shortcut for -l 3
+#   -h, --help           show this help
+
+set -uo pipefail
+
+BASE="/sys/class/power_supply"
+LEVEL=1
+
+# ---------------------------------------------------------------------------
+# Colors / styles (disabled when output isn't a terminal)
+# ---------------------------------------------------------------------------
+if [[ -t 1 ]]; then
+  BOLD=$'\e[1m'; DIM=$'\e[2m'; RESET=$'\e[0m'
+  RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'
+  BLUE=$'\e[34m'; CYAN=$'\e[36m'; MAGENTA=$'\e[35m'; GRAY=$'\e[90m'
+else
+  BOLD=""; DIM=""; RESET=""
+  RED=""; GREEN=""; YELLOW=""; BLUE=""; CYAN=""; MAGENTA=""; GRAY=""
+fi
+
+# ---------------------------------------------------------------------------
+# Ajuda / parsing de argumentos
+# ---------------------------------------------------------------------------
+usage() {
+  cat <<EOF
+${BOLD}battery_status.sh${RESET} — power/battery status
+
+Usage: $(basename "$0") [-l LEVEL] [--simple|--intermediate|--verbose] [-h]
+
+  -l, --level N          Detail level: 1=simple (default), 2=intermediate, 3=verbose
+  -s, --simple           Shortcut for -l 1
+  -i, --intermediate     Shortcut for -l 2
+  -v, --verbose          Shortcut for -l 3
+  -h, --help             Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -l|--level)
+      LEVEL="${2:-}"
+      shift 2
+      ;;
+    -s|--simple) LEVEL=1; shift ;;
+    -i|--intermediate) LEVEL=2; shift ;;
+    -v|--verbose) LEVEL=3; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "${RED}Unknown option: $1${RESET}" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if ! [[ "$LEVEL" =~ ^[1-3]$ ]]; then
+  echo "${RED}Invalid level: '$LEVEL' (use 1, 2 or 3)${RESET}" >&2
+  exit 1
+fi
+
+if [[ ! -d "$BASE" ]]; then
+  echo "${RED}Power supply information not available on this system.${RESET}"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Helpers de leitura
+# ---------------------------------------------------------------------------
+read_val() {
+  local f="$1"
+  [[ -f "$f" ]] && cat "$f" 2>/dev/null | tr -d '\n'
+}
+
+is_number() { [[ "$1" =~ ^-?[0-9]+$ ]]; }
+
+# Color based on charge percentage
+color_for_pct() {
+  local pct="$1"
+  if is_number "$pct"; then
+    if   (( pct >= 60 )); then echo "$GREEN"
+    elif (( pct >= 20 )); then echo "$YELLOW"
+    else echo "$RED"
+    fi
+  else
+    echo "$GRAY"
+  fi
+}
+
+# Progress bar: progress_bar 87 20  -> [################----]
+# Always renders the same total width (brackets + fill), even with no data,
+# so columns stay aligned across devices that lack a numeric capacity.
+progress_bar() {
+  local pct="$1" width="${2:-20}"
+  local filled=0
+  if is_number "$pct"; then
+    filled=$(( pct * width / 100 ))
+    (( filled > width )) && filled=$width
+    (( filled < 0 )) && filled=0
+  fi
+  local empty=$(( width - filled ))
+  printf '['
+  printf '%*s' "$filled" '' | tr ' ' '#'
+  printf '%*s' "$empty" '' | tr ' ' '-'
+  printf ']'
+}
+
+# Colored percentage OR a right-aligned "N/A" placeholder of the same width,
+# so the column never collapses when capacity is missing/non-numeric.
+# Used after the progress bar (levels 2/3), where a fixed width keeps the
+# numbers lining up across multiple battery blocks.
+format_pct() {
+  local pct="$1"
+  if is_number "$pct"; then
+    local color
+    color="$(color_for_pct "$pct")"
+    printf "%s%3s%%%s" "$color" "$pct" "$RESET"
+  else
+    printf "%s%4s%s" "$GRAY" "N/A" "$RESET"
+  fi
+}
+
+# Same as format_pct but flush-left, no padding. Used in level 1 (simple),
+# where the value sits right after the name column with nothing after it —
+# padding here would misalign it against plain text values like "Connected".
+format_pct_plain() {
+  local pct="$1"
+  if is_number "$pct"; then
+    printf "%s%s%%%s" "$(color_for_pct "$pct")" "$pct" "$RESET"
+  else
+    printf "%sN/A%s" "$GRAY" "$RESET"
+  fi
+}
+
+# Format hours as h:mm
+format_hm() {
+  local hours="$1"
+  awk -v h="$hours" 'BEGIN{
+    total=int(h*60+0.5);
+    hh=int(total/60); mm=total%60;
+    printf "%dh%02dm", hh, mm
+  }'
+}
+
+# ---------------------------------------------------------------------------
+# Device detection (via the "type" file, more robust than matching names)
+# ---------------------------------------------------------------------------
+ac_dev=""
+bat_devs=()
+
+shopt -s nullglob
+for dev in "$BASE"/*; do
+  [[ -d "$dev" ]] || continue
+  kind="$(read_val "$dev/type")"
+  case "$kind" in
+    Mains|Wireless|USB|ADP) [[ -z "$ac_dev" ]] && ac_dev="$dev" ;;
+    Battery) bat_devs+=("$dev") ;;
+  esac
+done
+
+# Fallback to name pattern matching if "type" is unavailable
+if [[ -z "$ac_dev" ]]; then
+  for pattern in "$BASE"/ADP* "$BASE"/AC* "$BASE"/ACAD*; do
+    for d in $pattern; do
+      [[ -d "$d" ]] && { ac_dev="$d"; break 2; }
+    done
+  done
+fi
+if [[ "${#bat_devs[@]}" -eq 0 ]]; then
+  for d in "$BASE"/BAT*; do
+    [[ -d "$d" ]] && bat_devs+=("$d")
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# AC status
+# ---------------------------------------------------------------------------
+ac_online="unknown"
+ac_text="${GRAY}Unknown${RESET}"
+if [[ -n "$ac_dev" && -f "$ac_dev/online" ]]; then
+  ac_online="$(read_val "$ac_dev/online")"
+  if [[ "$ac_online" == "1" ]]; then
+    ac_text="${GREEN}Connected${RESET}"
+  else
+    ac_text="${YELLOW}Disconnected${RESET}"
+  fi
+fi
+
+if [[ "${#bat_devs[@]}" -eq 0 ]]; then
+  echo "${ac_dev:+AC Adapter: }${ac_text}"
+  echo "${YELLOW}No battery found.${RESET}"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Dynamic column width: wide enough for the longest device name (e.g. AC
+# adapter, BAT0, hidpp_battery_0...), with a sensible minimum. This is what
+# was missing before and caused misalignment with longer device names.
+# ---------------------------------------------------------------------------
+name_width=14
+for dev in "$ac_dev" "${bat_devs[@]}"; do
+  [[ -n "$dev" ]] || continue
+  n="$(basename "$dev")"
+  len=$(( ${#n} + 1 ))
+  (( len > name_width )) && name_width=$len
+done
+
+# ---------------------------------------------------------------------------
+# Level 1 — Simple: just AC connection + each battery's percentage
+# ---------------------------------------------------------------------------
+print_simple() {
+  printf "%-${name_width}s %s\n" "AC:" "$ac_text"
+  for bat in "${bat_devs[@]}"; do
+    name="$(basename "$bat")"
+    pct="$(read_val "$bat/capacity")"
+    printf "%-${name_width}s %s\n" "$name:" "$(format_pct_plain "$pct")"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Level 2 — Intermediate: + status, progress bar, estimated time
+# ---------------------------------------------------------------------------
+print_intermediate() {
+  printf "%s%-${name_width}s%s %s\n" "$BOLD" "AC Adapter:" "$RESET" "$ac_text"
+  echo
+
+  for bat in "${bat_devs[@]}"; do
+    name="$(basename "$bat")"
+    pct="$(read_val "$bat/capacity")"
+    status="$(read_val "$bat/status")"
+    [[ -z "$status" ]] && status="Unknown"
+
+    printf "%s%s%s\n" "$BOLD" "$name" "$RESET"
+    printf "  %-14s %s %s\n" "Charge:" "$(progress_bar "$pct")" "$(format_pct "$pct")"
+    printf "  %-14s %s\n" "Status:" "$status"
+
+    time_est="$(estimate_time "$bat" "$status")"
+    [[ -n "$time_est" ]] && printf "  %-14s %s\n" "Estimate:" "$time_est"
+    echo
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Level 3 — Verbose: everything that's available
+# ---------------------------------------------------------------------------
+print_verbose() {
+  printf "%sAC Adapter%s\n" "$BOLD" "$RESET"
+  printf "  %-16s %s\n" "Status:" "$ac_text"
+  [[ -n "$ac_dev" ]] && printf "  %-16s %s\n" "Device:" "$(basename "$ac_dev")"
+  echo
+
+  for bat in "${bat_devs[@]}"; do
+    name="$(basename "$bat")"
+    pct="$(read_val "$bat/capacity")"
+    status="$(read_val "$bat/status")"
+    [[ -z "$status" ]] && status="Unknown"
+    cycle_count="$(read_val "$bat/cycle_count")"
+    temp="$(read_val "$bat/temp")"
+    voltage_now="$(read_val "$bat/voltage_now")"
+    manufacturer="$(read_val "$bat/manufacturer")"
+    model_name="$(read_val "$bat/model_name")"
+    technology="$(read_val "$bat/technology")"
+
+    energy_now="$(read_val "$bat/energy_now")"
+    energy_full="$(read_val "$bat/energy_full")"
+    charge_now="$(read_val "$bat/charge_now")"
+    charge_full="$(read_val "$bat/charge_full")"
+    power_now="$(read_val "$bat/power_now")"
+    current_now="$(read_val "$bat/current_now")"
+
+    echo "${CYAN}────────────────────────────────────────${RESET}"
+    printf "%s%s%s\n" "$BOLD" "$name" "$RESET"
+    echo "${CYAN}────────────────────────────────────────${RESET}"
+
+    printf "  %-16s %s %s\n" "Charge:" "$(progress_bar "$pct")" "$(format_pct "$pct")"
+    printf "  %-16s %s\n" "Status (kernel):" "$status"
+
+    time_est="$(estimate_time "$bat" "$status")"
+    [[ -n "$time_est" ]] && printf "  %-16s %s\n" "Estimate:" "$time_est"
+
+    [[ -n "$manufacturer" ]] && printf "  %-16s %s\n" "Manufacturer:" "$manufacturer"
+    [[ -n "$model_name"   ]] && printf "  %-16s %s\n" "Model:" "$model_name"
+    [[ -n "$technology"   ]] && printf "  %-16s %s\n" "Technology:" "$technology"
+    [[ -n "$cycle_count"  ]] && printf "  %-16s %s\n" "Cycles:" "$cycle_count"
+
+    if [[ -n "$temp" ]] && is_number "$temp"; then
+      printf "  %-16s %s\n" "Temperature:" "$(awk -v t="$temp" 'BEGIN{printf "%.1f°C", t/10}')"
+    fi
+    if [[ -n "$voltage_now" ]] && is_number "$voltage_now"; then
+      printf "  %-16s %s\n" "Voltage:" "$(awk -v v="$voltage_now" 'BEGIN{printf "%.3f V", v/1000000}')"
+    fi
+
+    [[ -n "$energy_now"  && -n "$energy_full"  ]] && printf "  %-16s %s / %s (µWh)\n" "Energy:" "$energy_now" "$energy_full"
+    [[ -n "$charge_now"  && -n "$charge_full"  ]] && printf "  %-16s %s / %s (µAh)\n" "Raw charge:" "$charge_now" "$charge_full"
+    [[ -n "$power_now"   ]] && printf "  %-16s %s (µW)\n" "Power:" "$power_now"
+    [[ -n "$current_now" ]] && printf "  %-16s %s (µA)\n" "Current:" "$current_now"
+
+    echo
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Time-to-full / time-remaining estimate
+# ---------------------------------------------------------------------------
+estimate_time() {
+  local bat="$1" status="$2"
+  local charge_now charge_full current_now abs_ua
+
+  charge_now="$(read_val "$bat/charge_now")"
+  charge_full="$(read_val "$bat/charge_full")"
+  current_now="$(read_val "$bat/current_now")"
+
+  # Fall back to energy units (µWh) if charge units (µAh) aren't present
+  if [[ -z "$charge_now" || -z "$charge_full" ]]; then
+    charge_now="$(read_val "$bat/energy_now")"
+    charge_full="$(read_val "$bat/energy_full")"
+    current_now="$(read_val "$bat/power_now")"
+  fi
+
+  [[ -z "$charge_now" || -z "$charge_full" || -z "$current_now" ]] && return
+  is_number "$charge_now" && is_number "$charge_full" && is_number "$current_now" || return
+
+  abs_ua="$(awk -v x="$current_now" 'BEGIN{ if (x<0) x=-x; print x }')"
+  awk -v x="$abs_ua" 'BEGIN{ exit !(x>0) }' || return
+
+  if [[ "$status" == "Charging" ]]; then
+    local delta hours
+    delta="$(awk -v full="$charge_full" -v now="$charge_now" 'BEGIN{d=full-now; if(d<0)d=0; print d}')"
+    hours="$(awk -v d="$delta" -v i="$abs_ua" 'BEGIN{print d/i}')"
+    echo "$(format_hm "$hours") until full"
+  elif [[ "$status" == "Discharging" ]]; then
+    local hours
+    hours="$(awk -v now="$charge_now" -v i="$abs_ua" 'BEGIN{print now/i}')"
+    echo "$(format_hm "$hours") remaining"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+case "$LEVEL" in
+  1) print_simple ;;
+  2) print_intermediate ;;
+  3) print_verbose ;;
+esac
