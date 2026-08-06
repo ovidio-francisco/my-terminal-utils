@@ -34,7 +34,14 @@ Mostly small Bash/Zsh utilities, collected here so they can be reused, changed, 
 ## Usage
 
 Clone the repository and add it to your `PATH`, or copy the scripts you want to use.
+
+
+```bash
+git clone https://github.com/ovidio-francisco/my-terminal-utils.git
+```
+
 =======
+
 Small scripts I use in my terminal.
 
 This is not a framework, package, or polished CLI suite.
