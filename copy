@@ -1,0 +1,17 @@
+#!/bin/bash
+
+if [[ $# -gt 0 ]]; then
+    if [[ $# -eq 1 && -f "$1" ]]; then
+        wl-copy < "$1"
+        echo "file content copied"
+    else
+        printf '%s' "$*" | wl-copy
+        echo "text copied"
+    fi
+elif [[ -p /dev/stdin ]]; then
+    wl-copy
+    echo "output of command copied"
+else
+    wl-copy
+    echo "file content copied"
+fi
