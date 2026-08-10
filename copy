@@ -1,6 +1,45 @@
 #!/bin/bash
 
+show_help() {
+    cat <<'EOF'
+copy - copy text, file contents, or command output to the clipboard using wl-copy
+
+Options:
+  -h, --help        Show this help page
+
+Usage:
+  copy
+  copy FILE
+  copy "TEXT"
+  COMMAND | copy
+  copy < FILE
+
+Input:
+  copy              Read text interactively until Ctrl+D
+  copy FILE         Copy the contents of FILE
+  copy "TEXT"       Copy the given text
+  COMMAND | copy    Copy command output
+  copy < FILE       Copy redirected input
+
+Examples:
+  copy
+  copy README.md
+  copy "Hello world"
+  ls -la | copy
+  git status | copy
+  copy < README.md
+EOF
+}
+
+case "$1" in
+    -h|--help)
+        show_help
+        exit 0
+        ;;
+esac
+
 if [[ $# -gt 0 ]]; then
+
     if [[ $# -eq 1 && -f "$1" ]]; then
         wl-copy < "$1"
         echo "file content copied"
@@ -8,10 +47,16 @@ if [[ $# -gt 0 ]]; then
         printf '%s' "$*" | wl-copy
         echo "text copied"
     fi
-elif [[ -p /dev/stdin ]]; then
+
+elif [[ -t 0 ]]; then
+
+    echo "Enter text (Ctrl+D to copy):"
     wl-copy
-    echo "output of command copied"
+    echo "text copied"
+
 else
+
     wl-copy
-    echo "file content copied"
+    echo "input copied"
+
 fi
