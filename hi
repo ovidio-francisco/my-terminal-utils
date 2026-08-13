@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+show_help() {
+    cat <<'EOF'
+Usage:
+  command | hi PATTERN [PATTERN...]
+
+Highlight text matching one or more regular expressions.
+
+Options:
+  -h, --help    Show this help message
+
+Examples:
+  ls -la | hi txt
+  ps aux | hi firefox chrome
+  dmesg | hi error warning failed
+  cat file.txt | hi 'foo|bar' baz
+  command | hi '[0-9]+'
+
+Matching is case-insensitive.
+Patterns are interpreted as extended regular expressions.
+EOF
+}
+
+case "${1:-}" in
+    -h|--help)
+        show_help
+        exit 0
+        ;;
+esac
+
+if [[ $# -eq 0 ]]; then
+    echo "hi: missing pattern" >&2
+    echo "Try 'hi --help' for more information." >&2
+    exit 1
+fi
+
+regex=""
+
+for pattern in "$@"; do
+    # Escape '/' because it is used as sed's delimiter.
+    pattern="${pattern//\//\\/}"
+
+    if [[ -n "$regex" ]]; then
+        regex+="|"
+    fi
+
+    regex+="($pattern)"
+done
+
+sed -E "s/($regex)/\x1b[1;31m\1\x1b[0m/gI"
