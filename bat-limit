@@ -1,0 +1,35 @@
+#!/bin/bash
+
+THRESHOLD="/sys/class/power_supply/BAT0/charge_control_end_threshold"
+
+if [[ ! -f "$THRESHOLD" ]]; then
+    echo "Battery charge limit is not available."
+    exit 1
+fi
+
+CURRENT=$(cat "$THRESHOLD")
+
+echo "Current maximum charge: ${CURRENT}%"
+echo
+
+read -r -p "Would you like to change it? [y/N] " ANSWER
+
+case "$ANSWER" in
+    y|Y|yes|YES)
+        read -r -p "New maximum charge percentage: " NEW_LIMIT
+
+        if ! [[ "$NEW_LIMIT" =~ ^[0-9]+$ ]] ||
+           (( NEW_LIMIT < 1 || NEW_LIMIT > 100 )); then
+            echo "Invalid percentage."
+            exit 1
+        fi
+
+        echo "$NEW_LIMIT" | sudo tee "$THRESHOLD" > /dev/null
+
+        echo "Maximum charge changed to ${NEW_LIMIT}%."
+        ;;
+
+    *)
+        echo "No changes."
+        ;;
+esac
