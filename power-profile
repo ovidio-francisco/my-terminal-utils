@@ -1,0 +1,39 @@
+#!/bin/bash
+
+current=$(powerprofilesctl get)
+
+echo "Current profile: $current"
+echo
+echo "Available profiles:"
+echo "1 power-saver"
+echo "2 balanced"
+echo "3 performance"
+echo "0 keep current"
+echo
+
+read -rp "Choose a profile: " choice
+
+case "$choice" in
+    1)
+        profile="power-saver"
+        ;;
+    2)
+        profile="balanced"
+        ;;
+    3)
+        profile="performance"
+        ;;
+    0|"")
+        echo "Keeping: $current"
+        exit 0
+        ;;
+    *)
+        echo "Invalid option."
+        exit 1
+        ;;
+esac
+
+powerprofilesctl set "$profile"
+
+echo
+echo "Profile changed to: $(powerprofilesctl get)"
