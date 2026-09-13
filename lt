@@ -13,7 +13,7 @@ else
 fi
 
 if [[ $# -lt 1 ]] ;
-	then tree -L 2 --dirsfirst $gitignore
+	then tree -L 3 --dirsfirst $gitignore
 else
 	tree -L $1 $2 $3 --dirsfirst $gitignore
 fi
